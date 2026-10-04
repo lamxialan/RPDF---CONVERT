@@ -581,8 +581,45 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload
                 rect = fitz.Rect(x, y, x + w, y + h)
                 page.insert_image(rect, stream=img_bytes)
                 applied_count += 1
-            except Exception:
-                pass
+        elif ann_type in ["edit_existing_text", "edited_text"] or ann.get("isExistingPdfText"):
+            orig_bbox = ann.get("originalBbox") or ann.get("bbox") or [x, y, x + w, y + h]
+            rect = fitz.Rect(
+                float(orig_bbox[0]) * scale_x,
+                float(orig_bbox[1]) * scale_y,
+                float(orig_bbox[2]) * scale_x,
+                float(orig_bbox[3]) * scale_y
+            )
+            # 1. Tutup area koordinat kata lama dengan redaction rectangle warna putih solid
+            page.add_redact_annot(rect, fill=(1, 1, 1))
+            page.apply_redactions()
+
+            # 2. Tuliskan kata pengganti tepat di koordinat awal dengan ukuran font dan warna yang sesuai
+            new_text = str(ann.get("newText") or ann.get("text", "")).strip()
+            if new_text:
+                try:
+                    raw_font_size = float(ann.get("fontSize") or 12)
+                except (ValueError, TypeError):
+                    raw_font_size = 12.0
+                font_size = max(8.0, raw_font_size * scale_y)
+
+                is_bold = bool(ann.get("isBold"))
+                is_italic = bool(ann.get("isItalic"))
+                font_family = str(ann.get("fontFamily", "")).lower()
+
+                if "times" in font_family or "serif" in font_family:
+                    fontname = "tibo" if is_bold and is_italic else "tibi" if is_bold else "tiit" if is_italic else "tiro"
+                elif "courier" in font_family or "mono" in font_family:
+                    fontname = "cobi" if is_bold and is_italic else "cobo" if is_bold else "coit" if is_italic else "cour"
+                else:
+                    fontname = "hebi" if is_bold and is_italic else "hebo" if is_bold else "heit" if is_italic else "helv"
+
+                insert_pt = fitz.Point(rect.x0, rect.y1 - 2)
+                try:
+                    page.insert_text(insert_pt, new_text, fontsize=font_size, color=color, fontname=fontname)
+                except Exception:
+                    page.insert_text(insert_pt, new_text, fontsize=font_size, color=color)
+            applied_count += 1
+
 
     # 4. Hapus halaman tertentu jika diminta (mundur dari indeks tertinggi)
     if deleted_pages and len(deleted_pages) < len(doc):
@@ -677,5 +714,64 @@ def replace_pdf_text(input_path: str, output_path: str, search_query: str, repla
     total_pages = len(doc)
     doc.close()
     return total_replaced, total_pages
+
+def extract_pdf_text_spans(input_path: str) -> list:
+    """
+    Mengekstrak baris-baris teks beserta koordinat bounding box, ukuran font, dan warna
+    dari seluruh halaman dokumen PDF menggunakan PyMuPDF get_text('dict').
+    """
+    import fitz
+
+    doc = fitz.open(input_path)
+    spans_data = []
+
+    for page_idx in range(len(doc)):
+        page = doc[page_idx]
+        blocks = page.get_text("dict").get("blocks", [])
+
+        for block in blocks:
+            if "lines" not in block:
+                continue
+            for line in block["lines"]:
+                l_bbox = line.get("bbox", [0, 0, 0, 0])
+                line_text = ""
+                font_size = 12
+                font_name = "helv"
+                color = "#000000"
+
+                for span in line.get("spans", []):
+                    line_text += span.get("text", "")
+                    if span.get("size"):
+                        font_size = span.get("size")
+                    if span.get("font"):
+                        font_name = span.get("font")
+                    c_int = span.get("color", 0)
+                    if isinstance(c_int, int) and c_int != 0:
+                        r = (c_int >> 16) & 255
+                        g = (c_int >> 8) & 255
+                        b = c_int & 255
+                        color = f"#{r:02x}{g:02x}{b:02x}"
+
+                line_text_trimmed = line_text.strip()
+                if line_text_trimmed:
+                    spans_data.append({
+                        "id": f"span_{page_idx}_{round(l_bbox[0], 1)}_{round(l_bbox[1], 1)}",
+                        "page": page_idx + 1,
+                        "text": line_text,
+                        "bbox": [round(l_bbox[0], 2), round(l_bbox[1], 2), round(l_bbox[2], 2), round(l_bbox[3], 2)],
+                        "x": round(l_bbox[0], 2),
+                        "y": round(l_bbox[1], 2),
+                        "width": round(l_bbox[2] - l_bbox[0], 2),
+                        "height": round(l_bbox[3] - l_bbox[1], 2),
+                        "fontSize": round(font_size, 1),
+                        "fontFamily": font_name,
+                        "color": color,
+                        "page_width": round(page.rect.width, 2),
+                        "page_height": round(page.rect.height, 2)
+                    })
+
+    doc.close()
+    return spans_data
+
 
 

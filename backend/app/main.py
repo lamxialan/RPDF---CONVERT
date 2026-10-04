@@ -759,6 +759,37 @@ async def search_pdf_text_endpoint(
         "matches": matches
     }
 
+@app.post("/api/pdf/get-text-spans")
+async def get_text_spans_endpoint(
+    file: UploadFile = File(...)
+):
+    contents = await file.read()
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_spans.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        from app.converters import extract_pdf_text_spans
+        spans = await asyncio.to_thread(extract_pdf_text_spans, input_path)
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=400, detail=f"Gagal mengekstrak teks layer PDF: {e}")
+    finally:
+        if os.path.exists(input_path):
+            try:
+                os.remove(input_path)
+            except Exception:
+                pass
+
+    return {
+        "status": "success",
+        "spans_count": len(spans),
+        "spans": spans
+    }
+
 @app.post("/api/pdf/replace-text")
 async def replace_pdf_text_endpoint(
     file: UploadFile = File(...),

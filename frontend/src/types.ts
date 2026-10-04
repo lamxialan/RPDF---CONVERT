@@ -14,10 +14,26 @@ export type PdfToolMode =
   | 'organize'
   | 'edit-sign';
 
+export interface PdfTextSpan {
+  id: string;
+  page: number; // 1-indexed
+  text: string;
+  bbox: [number, number, number, number]; // [x0, y0, x1, y1]
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+  fontFamily?: string;
+  color?: string;
+  page_width: number;
+  page_height: number;
+}
+
 export interface PdfAnnotation {
   id: string;
   page: number; // 1-indexed
-  type: 'text' | 'signature' | 'image' | 'whiteout' | 'highlight' | 'rect' | 'circle' | 'line' | 'arrow' | 'strikeout' | 'underline' | 'link' | 'form' | 'stamp' | 'freehand';
+  type: 'text' | 'signature' | 'image' | 'whiteout' | 'highlight' | 'rect' | 'circle' | 'line' | 'arrow' | 'strikeout' | 'underline' | 'link' | 'form' | 'stamp' | 'freehand' | 'edit_existing_text';
   x: number;
   y: number;
   width: number;
@@ -26,6 +42,7 @@ export interface PdfAnnotation {
   page_height: number;
   text?: string;
   fontSize?: number;
+  fontFamily?: string;
   color?: string;
   backgroundColor?: string;
   isBold?: boolean;
@@ -38,6 +55,9 @@ export interface PdfAnnotation {
   formType?: 'text' | 'multiline' | 'dropdown' | 'radio' | 'checkbox' | 'signature';
   stampText?: string;
   points?: Array<{ x: number; y: number }>;
+  isExistingPdfText?: boolean;
+  originalBbox?: [number, number, number, number];
+  originalText?: string;
 }
 
 export interface RecentActivityItem {

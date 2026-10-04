@@ -1005,6 +1005,41 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Get Text Spans Endpoint
+  if (req.method === 'POST' && url.pathname === '/api/pdf/get-text-spans') {
+    const contentType = req.headers['content-type'] || '';
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'Header multipart/form-data tidak valid' }));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const parts = parseMultipart(buffer, boundary);
+      const filePart = parts.find(p => p.filename);
+
+      if (!filePart || !filePart.data) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'File PDF tidak ditemukan' }));
+        return;
+      }
+
+      // Return empty array on node mock (client-side PDF.js extracts exact spans)
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'success',
+        spans_count: 0,
+        spans: []
+      }));
+    });
+    return;
+  }
+
+
   // Replace Text in PDF Endpoint
   if (req.method === 'POST' && url.pathname === '/api/pdf/replace-text') {
     const contentType = req.headers['content-type'] || '';

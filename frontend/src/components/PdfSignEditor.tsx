@@ -36,9 +36,10 @@ import {
   Redo2,
   Stamp,
   Eye,
-  EyeOff
+  EyeOff,
+  Move
 } from 'lucide-react';
-import { PdfAnnotation } from '../types';
+import { PdfAnnotation, PdfTextSpan } from '../types';
 import { SignatureModal } from './SignatureModal';
 import { getApiUrl } from '../config/api';
 import { addRecentActivity } from '../utils/recentActivity';
@@ -89,6 +90,26 @@ interface SearchMatch {
   rect: [number, number, number, number];
 }
 
+const FONT_FAMILIES = [
+  { label: 'Helvetica / Arial', value: 'Helvetica, Arial, sans-serif' },
+  { label: 'Times New Roman', value: 'Times New Roman, Times, serif' },
+  { label: 'Courier New', value: 'Courier New, Courier, monospace' },
+  { label: 'Inter', value: 'Inter, sans-serif' },
+  { label: 'Roboto', value: 'Roboto, sans-serif' },
+  { label: 'Georgia', value: 'Georgia, serif' }
+];
+
+const TEXT_COLORS = [
+  { name: 'Hitam', hex: '#000000' },
+  { name: 'Biru Tua', hex: '#0284C7' },
+  { name: 'Biru Navy', hex: '#1E40AF' },
+  { name: 'Merah', hex: '#DC2626' },
+  { name: 'Hijau', hex: '#16A34A' },
+  { name: 'Oranye', hex: '#EA580C' },
+  { name: 'Ungu', hex: '#9333EA' },
+  { name: 'Abu-abu', hex: '#4B5563' }
+];
+
 export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
   file,
   isOpen,
@@ -111,13 +132,15 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
   // Active Tool & Properties
   const [activeTool, setActiveTool] = useState<EditorTool>('text');
   const [fontSize, setFontSize] = useState<number>(14);
+  const [fontFamily, setFontFamily] = useState<string>('Helvetica, Arial, sans-serif');
   const [textColor, setTextColor] = useState<string>('#000000');
   const [isBold, setIsBold] = useState<boolean>(false);
   const [isItalic, setIsItalic] = useState<boolean>(false);
-  const [isUnderline, setIsUnderline] = useState<boolean>(false);
-  const [isStrikeout, setIsStrikeout] = useState<boolean>(false);
 
-  // Dropdown States
+  // Floating Toolbar dropdown toggles
+  const [showColorPicker, setShowColorPicker] = useState<boolean>(false);
+
+  // Sejda Dropdown States
   const [formsMenuOpen, setFormsMenuOpen] = useState<boolean>(false);
   const [imagesMenuOpen, setImagesMenuOpen] = useState<boolean>(false);
   const [annotateMenuOpen, setAnnotateMenuOpen] = useState<boolean>(false);
@@ -136,6 +159,10 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
   const [queuedReplacements, setQueuedReplacements] = useState<Array<{ search: string; replace: string; page?: number }>>([]);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // Original Text Extraction State (Gambar 2: Mengedit Teks Asli)
+  const [originalTextSpans, setOriginalTextSpans] = useState<PdfTextSpan[]>([]);
+  const [hoveredSpanId, setHoveredSpanId] = useState<string | null>(null);
+
   // Annotations History (Undo / Redo stack)
   const [annotations, setAnnotations] = useState<PdfAnnotation[]>([]);
   const [history, setHistory] = useState<PdfAnnotation[][]>([]);
@@ -153,6 +180,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
   // Canvas & Overlay references
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const activeInputRef = useRef<HTMLTextAreaElement>(null);
 
   // Dragging & Resizing State
   const [dragState, setDragState] = useState<{
@@ -184,6 +212,9 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
         setImagesMenuOpen(false);
         setAnnotateMenuOpen(false);
         setShapesMenuOpen(false);
+      }
+      if (!target.closest('.inline-toolbar-color-container')) {
+        setShowColorPicker(false);
       }
     };
     window.addEventListener('mousedown', handleOutsideClick);
@@ -280,6 +311,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     setSearchResults([]);
     setCurrentMatchIndex(-1);
     setIsFindReplaceOpen(false);
+    setOriginalTextSpans([]);
 
     const loadPdf = async () => {
       try {
@@ -304,6 +336,28 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
         }
         setPages(initialPages);
         setIsLoadingPdf(false);
+
+        // Fetch extracted text spans from backend PyMuPDF
+        try {
+          const formData = new FormData();
+          formData.append('file', file);
+          fetch(getApiUrl('/api/pdf/get-text-spans'), {
+            method: 'POST',
+            body: formData
+          })
+            .then(res => res.json())
+            .then(data => {
+              if (isMounted && data.spans && Array.isArray(data.spans)) {
+                setOriginalTextSpans(prev => {
+                  const map = new Map<string, PdfTextSpan>();
+                  prev.forEach(s => map.set(s.id, s));
+                  data.spans.forEach((s: PdfTextSpan) => map.set(s.id, s));
+                  return Array.from(map.values());
+                });
+              }
+            })
+            .catch(() => {});
+        } catch (_) {}
       } catch (err: any) {
         if (!isMounted) return;
         setIsLoadingPdf(false);
@@ -320,6 +374,62 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
   // Active page object
   const activePageObj = pages[currentPage - 1];
+
+  // ========================================================
+  // EXTRACT ORIGINAL TEXT SPANS FOR EDITING (GAMBAR 2)
+  // ========================================================
+  const extractClientPageTextSpans = useCallback(async (doc: pdfjsLib.PDFDocumentProxy, pageNumber: number, origPageIndex: number) => {
+    try {
+      const page = await doc.getPage(origPageIndex + 1);
+      const textContent = await page.getTextContent();
+      const viewport = page.getViewport({ scale: 1.0 });
+
+      // Group text items by line (similar vertical transform y-coords)
+      const lineMap = new Map<number, any[]>();
+      for (const item of textContent.items as any[]) {
+        if (!item.str || !item.str.trim()) continue;
+        const baselineY = Math.round(item.transform[5] / 4) * 4;
+        if (!lineMap.has(baselineY)) {
+          lineMap.set(baselineY, []);
+        }
+        lineMap.get(baselineY)!.push(item);
+      }
+
+      const extracted: PdfTextSpan[] = [];
+      lineMap.forEach((items, baselineY) => {
+        items.sort((a, b) => a.transform[4] - b.transform[4]);
+        const lineText = items.map(it => it.str).join(' ');
+        if (!lineText.trim()) return;
+
+        const minX = Math.min(...items.map(it => it.transform[4]));
+        const maxX = Math.max(...items.map(it => it.transform[4] + (it.width || 20)));
+        const firstH = items[0].height || 12;
+        const calculatedY = viewport.height - baselineY - firstH;
+
+        const spanId = `client_span_p${pageNumber}_${Math.round(minX)}_${Math.round(calculatedY)}`;
+        extracted.push({
+          id: spanId,
+          page: pageNumber,
+          text: lineText,
+          bbox: [minX, calculatedY, maxX, calculatedY + firstH + 4],
+          x: Math.max(0, minX),
+          y: Math.max(0, calculatedY),
+          width: Math.max(30, maxX - minX),
+          height: Math.max(14, firstH + 4),
+          fontSize: Math.round(firstH),
+          fontFamily: items[0].fontName?.includes('Times') ? 'Times New Roman' : 'Helvetica',
+          color: '#000000',
+          page_width: viewport.width,
+          page_height: viewport.height
+        });
+      });
+
+      setOriginalTextSpans(prev => {
+        const others = prev.filter(s => s.page !== pageNumber);
+        return [...others, ...extracted];
+      });
+    } catch (_) {}
+  }, []);
 
   // Render Page to Canvas
   const renderCurrentPage = useCallback(async () => {
@@ -354,11 +464,11 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, viewW, viewH);
 
-      // Optional subtle watermark indicator for empty page
+      // Subtle indicator for empty page
       ctx.fillStyle = '#F3F4F6';
       ctx.font = 'bold 16px Inter, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(`— HALAMAN KOSONG #${currentPage} —`, viewW / 2, 40);
+      ctx.fillText(`— LEMBAR KOSONG #${currentPage} —`, viewW / 2, 40);
 
       ctx.restore();
       return;
@@ -401,10 +511,13 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
       await page.render(renderContext).promise;
       ctx.restore();
+
+      // Extract client text spans if not already extracted
+      extractClientPageTextSpans(pdfDoc, currentPage, activePageObj.originalPageIndex);
     } catch (err) {
       console.error('[PDF Render Error]', err);
     }
-  }, [pdfDoc, activePageObj, currentPage, scale]);
+  }, [pdfDoc, activePageObj, currentPage, scale, extractClientPageTextSpans]);
 
   useEffect(() => {
     renderCurrentPage();
@@ -444,11 +557,10 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
         page_height: naturalDimensions.height,
         text: '', // Empty text so placeholder "Type your text" appears naturally
         fontSize: fontSize,
+        fontFamily: fontFamily,
         color: textColor,
         isBold: isBold,
-        isItalic: isItalic,
-        isUnderline: isUnderline,
-        isStrikeout: isStrikeout
+        isItalic: isItalic
       };
     } else if (activeTool === 'whiteout') {
       newAnn = {
@@ -592,6 +704,57 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
       setSelectedAnnId(newAnn.id);
       setActiveTool('select');
     }
+  };
+
+  // ========================================================
+  // KLIK & EDIT TEKS ASLI DARI DOKUMEN PDF (PERSIS GAMBAR 2)
+  // ========================================================
+  const handleEditOriginalTextSpan = (span: PdfTextSpan, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    // Periksa apakah baris ini sudah memiliki anotasi edit
+    const existingAnn = annotations.find(
+      a => a.id === `edit_${span.id}` || (a.isExistingPdfText && a.originalBbox && a.originalBbox[0] === span.bbox[0] && a.originalBbox[1] === span.bbox[1])
+    );
+
+    if (existingAnn) {
+      setSelectedAnnId(existingAnn.id);
+      setActiveTool('select');
+      return;
+    }
+
+    // Buat objek edit baru dengan whiteout mask otomatis di bawahnya
+    const newEditAnn: PdfAnnotation = {
+      id: `edit_${span.id}`,
+      page: currentPage,
+      type: 'edit_existing_text',
+      isExistingPdfText: true,
+      originalBbox: span.bbox,
+      originalText: span.text,
+      text: span.text,
+      x: span.x,
+      y: span.y,
+      width: Math.max(span.width, 60),
+      height: Math.max(span.height, 22),
+      fontSize: span.fontSize,
+      fontFamily: span.fontFamily || 'Helvetica, Arial, sans-serif',
+      color: span.color || '#000000',
+      isBold: false,
+      isItalic: false,
+      page_width: naturalDimensions.width,
+      page_height: naturalDimensions.height
+    };
+
+    const updated = [...annotations, newEditAnn];
+    setAnnotations(updated);
+    pushHistory(updated);
+    setSelectedAnnId(newEditAnn.id);
+    setActiveTool('select');
+    showNotice(`Mengedit teks asli: "${span.text.substring(0, 30)}..."`);
+
+    setTimeout(() => {
+      activeInputRef.current?.focus();
+    }, 50);
   };
 
   // Freehand Drawing Handlers
@@ -852,14 +1015,12 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     }
   };
 
-  // ========================================================
-  // PERBAIKAN FITUR TAMBAH & HAPUS HALAMAN (DYNAMIC INSERT PAGE)
-  // ========================================================
+  // Dynamic Insert & Delete Pages
   const handleInsertPage = () => {
     const newPageId = `new_page_${Date.now()}`;
     const newPage: EditorPage = {
       id: newPageId,
-      pageIndex: currentPage, // Sisipkan tepat setelah halaman aktif
+      pageIndex: currentPage,
       originalPageIndex: -1,
       isNew: true,
       width: 595,
@@ -877,7 +1038,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     }));
 
     setPages(nextPages);
-    setCurrentPage(currentPage + 1); // Pindah langsung ke halaman baru
+    setCurrentPage(currentPage + 1);
     showNotice(`Halaman kosong baru ditambahkan (Hal ${currentPage + 1} dari ${nextPages.length}).`);
   };
 
@@ -895,7 +1056,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
         pageIndex: idx
       }));
 
-    // Hapus anotasi pada halaman yang dihapus
     const updatedAnnotations = annotations.filter(a => a.page !== currentPage);
     setAnnotations(updatedAnnotations);
     pushHistory(updatedAnnotations);
@@ -916,9 +1076,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     );
   };
 
-  // ========================================================
-  // LOGIKA FIND & REPLACE (CARI & GANTI TEKS)
-  // ========================================================
+  // Find & Replace Handlers
   const handleSearchText = async () => {
     if (!searchQuery || !searchQuery.trim()) {
       setSearchStatus('Masukkan kata kunci pencarian.');
@@ -948,12 +1106,10 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
           setSearchResults(matches);
           setCurrentMatchIndex(0);
           setSearchStatus(`${matches.length} kata ditemukan.`);
-          // Pindah ke halaman tempat temuan pertama jika di luar halaman aktif
           if (matches[0].page && matches[0].page !== currentPage && matches[0].page <= pages.length) {
             setCurrentPage(matches[0].page);
           }
         } else {
-          // Fallback pencarian client-side PDF.js jika backend tidak menemukan
           await clientSidePdfSearch(searchQuery.trim());
         }
       } else {
@@ -966,7 +1122,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     }
   };
 
-  // Client-side PDF.js text search fallback
   const clientSidePdfSearch = async (query: string) => {
     if (!pdfDoc) {
       setSearchStatus('Teks tidak ditemukan.');
@@ -1032,12 +1187,10 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     }
   };
 
-  // Replace Current Match
   const handleReplaceCurrent = () => {
     if (currentMatchIndex < 0 || currentMatchIndex >= searchResults.length) return;
     const match = searchResults[currentMatchIndex];
 
-    // 1. Redact area dengan whiteout
     const whiteoutAnn: PdfAnnotation = {
       id: 'rep_wo_' + Date.now(),
       page: match.page,
@@ -1050,7 +1203,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
       page_height: naturalDimensions.height
     };
 
-    // 2. Tuliskan teks pengganti
     const textAnn: PdfAnnotation = {
       id: 'rep_tx_' + Date.now(),
       page: match.page,
@@ -1070,10 +1222,8 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     setAnnotations(updated);
     pushHistory(updated);
 
-    // Queue for backend vector PyMuPDF replace
     setQueuedReplacements(prev => [...prev, { search: searchQuery, replace: replaceQuery, page: match.page }]);
 
-    // Hapus match dari list
     const remaining = searchResults.filter((_, idx) => idx !== currentMatchIndex);
     setSearchResults(remaining);
     if (remaining.length > 0) {
@@ -1089,7 +1239,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     }
   };
 
-  // Replace All Matches
   const handleReplaceAll = () => {
     if (searchResults.length === 0) return;
 
@@ -1133,9 +1282,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     showNotice(`Berhasil mengganti semua temuan teks dengan "${replaceQuery}".`);
   };
 
-  // ========================================================
-  // DRAG & RESIZE HANDLERS
-  // ========================================================
+  // Drag and Resize Handlers
   const handleMouseDownItem = (e: React.MouseEvent, annId: string, action: 'move' | 'resize', handle?: 'tl' | 'tr' | 'bl' | 'br') => {
     e.stopPropagation();
     const target = annotations.find(a => a.id === annId);
@@ -1236,15 +1383,13 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     );
   };
 
-  // ========================================================
-  // SAVE & APPLY VIA BACKEND PYMUPDF
-  // ========================================================
+  // Save & Apply via Backend PyMuPDF
   const handleApplyAndDownload = async () => {
     if (!file || isApplying) return;
 
     setIsApplying(true);
     setErrorMessage(null);
-    setApplyStep('Memproses susunan halaman...');
+    setApplyStep('Memproses lembar dokumen...');
 
     try {
       await new Promise(r => setTimeout(r, 300));
@@ -1325,6 +1470,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
   const pageAnnotations = annotations.filter(a => a.page === currentPage);
   const totalAnnotationsCount = annotations.length;
   const currentMatchesOnThisPage = searchResults.filter(m => m.page === currentPage);
+  const originalSpansOnThisPage = originalTextSpans.filter(s => s.page === currentPage);
 
   if (!isOpen) return null;
 
@@ -1432,7 +1578,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
               ? 'bg-neo-yellow text-black shadow-neo-sm scale-105 ring-2 ring-black'
               : 'bg-white dark:bg-[#181818] hover:bg-neo-yellow/30'
           }`}
-          title="Tambah Teks (Klik di sembarang area dokumen)"
+          title="Tambah Teks Baru (Klik di sembarang area dokumen)"
         >
           <Type className="w-3.5 h-3.5 stroke-[2.5]" />
           <span>Text</span>
@@ -1470,7 +1616,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
           {formsMenuOpen && (
             <div className="absolute top-full mt-1.5 left-0 bg-white dark:bg-[#1E1E1E] border-[3px] border-black dark:border-white rounded-2xl shadow-neo p-3 z-50 flex flex-col gap-2 w-64 text-left">
-              {/* Category 1: Symbols */}
               <div>
                 <p className="text-[10px] font-black uppercase text-slate-400 mb-1.5 tracking-wider">
                   Add Text and Symbols
@@ -1502,7 +1647,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
               <div className="h-[2px] bg-slate-200 dark:bg-slate-700 my-1" />
 
-              {/* Category 2: Form Fields */}
               <div>
                 <p className="text-[10px] font-black uppercase text-slate-400 mb-1.5 tracking-wider">
                   Add New Form Fields
@@ -1555,7 +1699,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
               <div className="h-[2px] bg-slate-200 dark:bg-slate-700 my-1" />
 
-              {/* Category 3: Edit Mode */}
               <div className="flex items-center justify-between pt-0.5">
                 <span className="text-[11px] font-bold">Form Edit Mode</span>
                 <button
@@ -1589,7 +1732,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
           {imagesMenuOpen && (
             <div className="absolute top-full mt-1.5 left-0 bg-white dark:bg-[#1E1E1E] border-[3px] border-black dark:border-white rounded-2xl shadow-neo p-3 z-50 flex flex-col gap-2 w-60 text-left">
-              {/* Category 1: Quick Stamps */}
               <div>
                 <p className="text-[10px] font-black uppercase text-slate-400 mb-1.5 tracking-wider">
                   Stempel Teks Cepat
@@ -1618,7 +1760,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
               <div className="h-[2px] bg-slate-200 dark:bg-slate-700 my-1" />
 
-              {/* Category 2: Image Actions */}
               <div className="flex flex-col gap-1 text-xs">
                 <button
                   onClick={() => {
@@ -1696,7 +1837,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
           {annotateMenuOpen && (
             <div className="absolute top-full mt-1.5 left-0 bg-white dark:bg-[#1E1E1E] border-[3px] border-black dark:border-white rounded-2xl shadow-neo p-3 z-50 flex flex-col gap-2 w-64 text-left">
-              {/* Toggle Show Annotations */}
               <div className="flex items-center justify-between pb-1 border-b border-slate-200 dark:border-slate-700">
                 <span className="text-[11px] font-bold">Show annotations</span>
                 <button
@@ -1708,13 +1848,11 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                 </button>
               </div>
 
-              {/* Category TEXT */}
               <div>
                 <p className="text-[10px] font-black uppercase text-slate-400 mb-1 tracking-wider">
                   Text Markup
                 </p>
                 <div className="flex flex-col gap-1.5">
-                  {/* Highlight */}
                   <div className="flex items-center justify-between">
                     <button
                       onClick={() => {
@@ -1742,7 +1880,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                     </div>
                   </div>
 
-                  {/* Strikeout */}
                   <div className="flex items-center justify-between">
                     <button
                       onClick={() => {
@@ -1770,7 +1907,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                     </div>
                   </div>
 
-                  {/* Underline */}
                   <div className="flex items-center justify-between">
                     <button
                       onClick={() => {
@@ -1802,7 +1938,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
               <div className="h-[2px] bg-slate-200 dark:bg-slate-700 my-0.5" />
 
-              {/* Category FREEHAND */}
               <div>
                 <p className="text-[10px] font-black uppercase text-slate-400 mb-1 tracking-wider">
                   Freehand
@@ -1924,7 +2059,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
             </button>
           </div>
 
-          {/* Search Input */}
           <div className="flex items-center gap-1">
             <input
               ref={searchInputRef}
@@ -1946,7 +2080,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
             </button>
           </div>
 
-          {/* Replace Input */}
           <div className="flex items-center gap-1">
             <input
               type="text"
@@ -1957,7 +2090,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
             />
           </div>
 
-          {/* Action Buttons */}
           <div className="flex items-center justify-between pt-1">
             <div className="flex items-center gap-1">
               <button
@@ -1976,7 +2108,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
               </button>
             </div>
 
-            {/* Navigation Arrows & Count */}
             {searchResults.length > 0 && (
               <div className="flex items-center gap-1">
                 <span className="text-[10px] font-black text-slate-500">
@@ -1998,7 +2129,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
             )}
           </div>
 
-          {/* Search Status text */}
           {searchStatus && (
             <p className="text-[10px] font-bold text-slate-500 truncate pt-0.5">
               {searchStatus}
@@ -2020,7 +2150,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
         {/* PER-PAGE BAR DIRECTLY ATOP THE CURRENT PDF PAGE */}
         <div className="mb-3 flex items-center justify-between gap-3 bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-2xl px-4 py-2 shadow-neo-sm text-xs font-black w-full max-w-2xl z-10">
 
-          {/* Page Indicator & Navigation */}
           <div className="flex items-center gap-2">
             <span className="bg-neo-yellow text-black border border-black px-2.5 py-0.5 rounded-md shadow-neo-sm font-black">
               Hal {currentPage} dari {pages.length}
@@ -2133,13 +2262,47 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
             {/* The Actual Rendered PDF Canvas */}
             <canvas ref={canvasRef} className="block pointer-events-none" />
 
-            {/* Interactive Overlay Layer for Annotations & Highlight Boxes */}
+            {/* Interactive Overlay Layer for Annotations & Text Spans */}
             <div
               ref={overlayRef}
               onClick={handleOverlayClick}
               onMouseDown={handleFreehandMouseDown}
               className="absolute inset-0 z-10 overflow-visible"
             >
+              {/* GAMBAR 2: DETEKSI & HIGHLIGHT KOTAK TEKS ASLI DOKUMEN PDF */}
+              {originalSpansOnThisPage.map((span) => {
+                // Jangan tampilkan jika sudah di-convert menjadi anotasi edit
+                const isAlreadyBeingEdited = annotations.some(
+                  a => a.id === `edit_${span.id}` || (a.isExistingPdfText && a.originalBbox && a.originalBbox[0] === span.bbox[0] && a.originalBbox[1] === span.bbox[1])
+                );
+                if (isAlreadyBeingEdited) return null;
+
+                const screenX = (span.x / naturalDimensions.width) * viewportDimensions.width;
+                const screenY = (span.y / naturalDimensions.height) * viewportDimensions.height;
+                const screenW = (span.width / naturalDimensions.width) * viewportDimensions.width;
+                const screenH = (span.height / naturalDimensions.height) * viewportDimensions.height;
+                const isHovered = hoveredSpanId === span.id;
+
+                return (
+                  <div
+                    key={span.id}
+                    onMouseEnter={() => setHoveredSpanId(span.id)}
+                    onMouseLeave={() => setHoveredSpanId(null)}
+                    onClick={(e) => handleEditOriginalTextSpan(span, e)}
+                    className="absolute cursor-text transition-all group z-20"
+                    style={{
+                      left: screenX,
+                      top: screenY,
+                      width: screenW,
+                      height: screenH,
+                      border: isHovered ? '1px dashed #38bdf8' : '1px solid transparent',
+                      backgroundColor: isHovered ? 'rgba(56, 189, 248, 0.08)' : 'transparent'
+                    }}
+                    title="Klik untuk mengedit teks dokumen ini"
+                  />
+                );
+              })}
+
               {/* FIND & REPLACE SEARCH HIGHLIGHT BOXES */}
               {currentMatchesOnThisPage.map((m, idx) => {
                 const globalIdx = searchResults.findIndex(r => r === m);
@@ -2168,9 +2331,10 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                 );
               })}
 
-              {/* ANNOTATIONS LAYER */}
+              {/* ANNOTATIONS & EDITABLE TEXT LAYER */}
               {showAnnotations && pageAnnotations.map((ann) => {
                 const isSelected = selectedAnnId === ann.id;
+                const isTextType = ann.type === 'text' || ann.type === 'edit_existing_text';
 
                 const screenX = (ann.x / naturalDimensions.width) * viewportDimensions.width;
                 const screenY = (ann.y / naturalDimensions.height) * viewportDimensions.height;
@@ -2184,12 +2348,11 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       e.stopPropagation();
                       setSelectedAnnId(ann.id);
                     }}
-                    onMouseDown={(e) => handleMouseDownItem(e, ann.id, 'move')}
                     className={`absolute select-none transition-shadow ${
-                      ann.type === 'text'
+                      isTextType
                         ? isSelected
-                          ? 'border border-blue-500 ring-1 ring-blue-400/50 cursor-move'
-                          : 'border border-transparent hover:border-blue-400/40 cursor-text'
+                          ? 'ring-1 ring-blue-500/70 bg-white/95 dark:bg-[#1E1E1E]/95'
+                          : 'hover:border border-blue-400/40 cursor-text'
                         : isSelected
                         ? 'border-2 border-dashed border-black dark:border-white cursor-move'
                         : 'hover:border border-black/40 cursor-move'
@@ -2197,178 +2360,251 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                     style={{
                       left: screenX,
                       top: screenY,
-                      width: ann.type === 'text' ? 'auto' : screenW,
-                      height: ann.type === 'text' ? 'auto' : screenH,
-                      minWidth: ann.type === 'text' ? '40px' : undefined
+                      width: isTextType ? 'auto' : screenW,
+                      height: isTextType ? 'auto' : screenH,
+                      minWidth: isTextType ? '45px' : undefined
                     }}
                   >
-                    {/* FLOATING ACTION TOOLBAR (SEJDA STYLE: DOCKED DIRECTLY ABOVE ACTIVE ITEM) */}
-                    {isSelected && (
+                    {/* GAMBAR 1: INLINE FLOATING TEXT TOOLBAR (DOCKED LANGSUNG DI ATAS TEKS AKTIF) */}
+                    {isSelected && isTextType && (
                       <div
-                        className="absolute -top-11 left-0 bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-xl shadow-neo-sm px-2 py-1 flex items-center gap-1.5 z-40 text-black dark:text-white animate-in fade-in duration-100 whitespace-nowrap"
+                        className="absolute -top-11 left-0 bg-white dark:bg-[#1E1E1E] border border-blue-400 dark:border-blue-500 rounded-lg shadow-md px-1.5 py-1 flex items-center gap-1 z-50 text-black dark:text-white animate-in fade-in duration-100 whitespace-nowrap text-xs select-none"
                         onMouseDown={(e) => e.stopPropagation()}
+                        style={{
+                          transform: screenY < 50 ? 'translateY(55px)' : 'none'
+                        }}
                       >
-                        {/* If text: Quick format controls */}
-                        {ann.type === 'text' && (
-                          <>
-                            {/* Font size */}
-                            <select
-                              value={ann.fontSize || fontSize}
-                              onChange={(e) => {
-                                const newSize = Number(e.target.value);
-                                setFontSize(newSize);
-                                const updated = annotations.map(a => (a.id === ann.id ? { ...a, fontSize: newSize } : a));
-                                setAnnotations(updated);
-                                pushHistory(updated);
-                              }}
-                              className="bg-slate-100 dark:bg-[#252525] border border-black/30 rounded text-xs px-1.5 py-0.5 font-black cursor-pointer"
-                            >
-                              {[10, 12, 14, 16, 18, 20, 24, 32].map(s => (
-                                <option key={s} value={s}>{s} pt</option>
-                              ))}
-                            </select>
+                        {/* 1. [ B ] Toggle Bold */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextBold = !ann.isBold;
+                            setIsBold(nextBold);
+                            const updated = annotations.map(a => (a.id === ann.id ? { ...a, isBold: nextBold } : a));
+                            setAnnotations(updated);
+                            pushHistory(updated);
+                          }}
+                          className={`w-6 h-6 rounded flex items-center justify-center font-black text-xs cursor-pointer transition ${
+                            ann.isBold ? 'bg-blue-100 dark:bg-blue-900/60 text-blue-600 dark:text-blue-400 font-black' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                          title="Tebal (Bold)"
+                        >
+                          <Bold className="w-3.5 h-3.5 stroke-[3]" />
+                        </button>
 
-                            {/* Bold */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const nextBold = !ann.isBold;
-                                setIsBold(nextBold);
-                                const updated = annotations.map(a => (a.id === ann.id ? { ...a, isBold: nextBold } : a));
-                                setAnnotations(updated);
-                                pushHistory(updated);
-                              }}
-                              className={`p-1 rounded cursor-pointer ${ann.isBold ? 'bg-neo-yellow text-black font-black' : 'hover:bg-slate-100'}`}
-                              title="Tebal (Bold)"
-                            >
-                              <Bold className="w-3.5 h-3.5 stroke-[3]" />
-                            </button>
+                        {/* 2. [ I ] Toggle Italic */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextItalic = !ann.isItalic;
+                            setIsItalic(nextItalic);
+                            const updated = annotations.map(a => (a.id === ann.id ? { ...a, isItalic: nextItalic } : a));
+                            setAnnotations(updated);
+                            pushHistory(updated);
+                          }}
+                          className={`w-6 h-6 rounded flex items-center justify-center font-serif italic text-xs cursor-pointer transition ${
+                            ann.isItalic ? 'bg-blue-100 dark:bg-blue-900/60 text-blue-600 dark:text-blue-400' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                          title="Miring (Italic)"
+                        >
+                          <Italic className="w-3.5 h-3.5 stroke-[3]" />
+                        </button>
 
-                            {/* Italic */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const nextItalic = !ann.isItalic;
-                                setIsItalic(nextItalic);
-                                const updated = annotations.map(a => (a.id === ann.id ? { ...a, isItalic: nextItalic } : a));
-                                setAnnotations(updated);
-                                pushHistory(updated);
-                              }}
-                              className={`p-1 rounded cursor-pointer ${ann.isItalic ? 'bg-neo-yellow text-black font-black' : 'hover:bg-slate-100'}`}
-                              title="Miring (Italic)"
-                            >
-                              <Italic className="w-3.5 h-3.5 stroke-[3]" />
-                            </button>
+                        <div className="w-[1px] h-4 bg-slate-200 dark:bg-slate-700 mx-0.5" />
 
-                            {/* Underline */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const nextUnderline = !ann.isUnderline;
-                                setIsUnderline(nextUnderline);
-                                const updated = annotations.map(a => (a.id === ann.id ? { ...a, isUnderline: nextUnderline } : a));
-                                setAnnotations(updated);
-                                pushHistory(updated);
-                              }}
-                              className={`p-1 rounded cursor-pointer ${ann.isUnderline ? 'bg-neo-yellow text-black font-black' : 'hover:bg-slate-100'}`}
-                              title="Garis Bawah (Underline)"
-                            >
-                              <Underline className="w-3.5 h-3.5 stroke-[3]" />
-                            </button>
+                        {/* 3. [ T↕ ] Font Size Dropdown */}
+                        <div className="flex items-center gap-0.5">
+                          <span className="text-[10px] font-black text-slate-400 pl-0.5">T↕</span>
+                          <select
+                            value={ann.fontSize || fontSize}
+                            onChange={(e) => {
+                              const newSize = Number(e.target.value);
+                              setFontSize(newSize);
+                              const updated = annotations.map(a => (a.id === ann.id ? { ...a, fontSize: newSize } : a));
+                              setAnnotations(updated);
+                              pushHistory(updated);
+                            }}
+                            className="bg-slate-50 dark:bg-[#252525] border border-slate-300 dark:border-slate-600 rounded text-xs px-1 py-0.5 font-bold cursor-pointer outline-none"
+                          >
+                            {[8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48].map(s => (
+                              <option key={s} value={s}>{s} pt</option>
+                            ))}
+                          </select>
+                        </div>
 
-                            {/* Strikeout */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const nextStrike = !ann.isStrikeout;
-                                setIsStrikeout(nextStrike);
-                                const updated = annotations.map(a => (a.id === ann.id ? { ...a, isStrikeout: nextStrike } : a));
-                                setAnnotations(updated);
-                                pushHistory(updated);
-                              }}
-                              className={`p-1 rounded cursor-pointer ${ann.isStrikeout ? 'bg-neo-yellow text-black font-black' : 'hover:bg-slate-100'}`}
-                              title="Coret Teks (Strikethrough)"
-                            >
-                              <Strikethrough className="w-3.5 h-3.5 stroke-[3]" />
-                            </button>
+                        {/* 4. [ Aa ▾ ] Font Family Dropdown */}
+                        <select
+                          value={ann.fontFamily || fontFamily}
+                          onChange={(e) => {
+                            const newFont = e.target.value;
+                            setFontFamily(newFont);
+                            const updated = annotations.map(a => (a.id === ann.id ? { ...a, fontFamily: newFont } : a));
+                            setAnnotations(updated);
+                            pushHistory(updated);
+                          }}
+                          className="bg-slate-50 dark:bg-[#252525] border border-slate-300 dark:border-slate-600 rounded text-xs px-1.5 py-0.5 font-bold cursor-pointer outline-none max-w-[100px]"
+                          title="Jenis Huruf / Font Family"
+                        >
+                          {FONT_FAMILIES.map(f => (
+                            <option key={f.value} value={f.value}>{f.label}</option>
+                          ))}
+                        </select>
 
-                            {/* Colors */}
-                            <div className="flex items-center gap-1 mx-1">
-                              {['#000000', '#DC2626', '#0B3B8B', '#16A34A'].map(color => (
+                        <div className="w-[1px] h-4 bg-slate-200 dark:bg-slate-700 mx-0.5" />
+
+                        {/* 5. [ 🎨 ▾ ] Color Picker */}
+                        <div className="relative inline-toolbar-color-container">
+                          <button
+                            type="button"
+                            onClick={() => setShowColorPicker(!showColorPicker)}
+                            className="w-6 h-6 rounded flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                            title="Pilih Warna Teks"
+                          >
+                            <span
+                              className="w-3.5 h-3.5 rounded-full border border-black shadow-xs inline-block"
+                              style={{ backgroundColor: ann.color || '#000000' }}
+                            />
+                          </button>
+
+                          {showColorPicker && (
+                            <div className="absolute top-full mt-1.5 left-0 bg-white dark:bg-[#1E1E1E] border border-slate-300 dark:border-slate-600 rounded-lg shadow-lg p-2 z-50 grid grid-cols-4 gap-1.5 w-32">
+                              {TEXT_COLORS.map(c => (
                                 <button
-                                  key={color}
+                                  key={c.hex}
+                                  type="button"
                                   onClick={() => {
-                                    setTextColor(color);
-                                    const updated = annotations.map(a => (a.id === ann.id ? { ...a, color } : a));
+                                    setTextColor(c.hex);
+                                    const updated = annotations.map(a => (a.id === ann.id ? { ...a, color: c.hex } : a));
                                     setAnnotations(updated);
                                     pushHistory(updated);
+                                    setShowColorPicker(false);
                                   }}
-                                  className={`w-3.5 h-3.5 rounded-full border border-black transition-transform cursor-pointer ${
-                                    ann.color === color ? 'scale-125 ring-1 ring-black' : ''
-                                  }`}
-                                  style={{ backgroundColor: color }}
+                                  className="w-5 h-5 rounded-full border border-black hover:scale-125 transition cursor-pointer"
+                                  style={{ backgroundColor: c.hex }}
+                                  title={c.name}
                                 />
                               ))}
                             </div>
-                            <div className="w-[1px] h-4 bg-slate-300 dark:bg-slate-700 mx-0.5" />
-                          </>
-                        )}
+                          )}
+                        </div>
 
-                        {/* Duplicate */}
+                        {/* 6. [ 🔗 ] Hyperlink */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newUrl = window.prompt('Masukkan tautan URL (Hyperlink):', ann.url || 'https://');
+                            if (newUrl !== null) {
+                              const updated = annotations.map(a => (a.id === ann.id ? { ...a, url: newUrl } : a));
+                              setAnnotations(updated);
+                              pushHistory(updated);
+                            }
+                          }}
+                          className="w-6 h-6 rounded hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center cursor-pointer text-slate-700 dark:text-slate-300"
+                          title="Sisipkan Tautan Hyperlink"
+                        >
+                          <Link className="w-3.5 h-3.5 stroke-[2.5]" />
+                        </button>
+
+                        <div className="w-[1px] h-4 bg-slate-200 dark:bg-slate-700 mx-0.5" />
+
+                        {/* 7. [ ✥ ] Drag Handle (Move Cursor) */}
+                        <div
+                          onMouseDown={(e) => handleMouseDownItem(e, ann.id, 'move')}
+                          className="w-6 h-6 rounded hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center cursor-move text-slate-700 dark:text-slate-300"
+                          title="Geser Posisi Teks (Drag)"
+                        >
+                          <Move className="w-3.5 h-3.5 stroke-[2.5]" />
+                        </div>
+
+                        {/* 8. [ ❐ ] Duplicate Text */}
                         <button
                           type="button"
                           onClick={(e) => handleDuplicate(ann.id, e)}
-                          className="p-1 hover:bg-neo-yellow hover:text-black rounded transition-colors cursor-pointer"
-                          title="Duplikasi Objek"
+                          className="w-6 h-6 rounded hover:bg-neo-yellow hover:text-black flex items-center justify-center cursor-pointer transition"
+                          title="Duplikasi Teks"
                         >
                           <Copy className="w-3.5 h-3.5 stroke-[2.5]" />
                         </button>
 
-                        {/* Delete */}
+                        {/* 9. [ 🗑 ] Delete Text */}
                         <button
                           type="button"
                           onClick={(e) => handleDelete(ann.id, e)}
-                          className="p-1 hover:bg-rose-500 hover:text-white rounded transition-colors cursor-pointer text-red-600"
-                          title="Hapus Objek (Delete / Backspace)"
+                          className="w-6 h-6 rounded hover:bg-rose-500 hover:text-white flex items-center justify-center cursor-pointer transition text-red-600"
+                          title="Hapus Teks"
                         >
                           <Trash2 className="w-3.5 h-3.5 stroke-[2.5]" />
                         </button>
                       </div>
                     )}
 
-                    {/* CONTENT RENDERER BASED ON TYPE */}
-
-                    {/* 1. Seamless Sejda Text Box */}
-                    {ann.type === 'text' && (
-                      <textarea
-                        rows={1}
-                        value={ann.text ?? ''}
-                        placeholder="Type your text"
-                        onChange={(e) => {
-                          handleTextChange(ann.id, e.target.value);
-                          e.target.style.height = 'auto';
-                          e.target.style.height = `${e.target.scrollHeight}px`;
-                        }}
-                        onBlur={() => pushHistory(annotations)}
+                    {/* Standard Floating Toolbar for Non-Text Items (Shapes/Images/Stamps) */}
+                    {isSelected && !isTextType && (
+                      <div
+                        className="absolute -top-10 left-0 bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-xl shadow-neo-sm px-2 py-1 flex items-center gap-1.5 z-40 text-black dark:text-white"
                         onMouseDown={(e) => e.stopPropagation()}
-                        style={{
-                          fontSize: `${((ann.fontSize || 14) * scale)}px`,
-                          color: ann.color || '#000000',
-                          fontWeight: ann.isBold ? 800 : 500,
-                          fontStyle: ann.isItalic ? 'italic' : 'normal',
-                          textDecoration: `${ann.isUnderline ? 'underline' : ''} ${ann.isStrikeout ? 'line-through' : ''}`.trim() || 'none',
-                          lineHeight: '1.2'
-                        }}
-                        className="w-full bg-transparent resize-none overflow-hidden outline-none border-none p-0 m-0 font-sans tracking-tight placeholder:text-slate-400 block whitespace-pre-wrap"
-                      />
+                      >
+                        <button
+                          type="button"
+                          onClick={(e) => handleDuplicate(ann.id, e)}
+                          className="p-1 hover:bg-neo-yellow hover:text-black rounded transition cursor-pointer"
+                          title="Duplikasi Objek"
+                        >
+                          <Copy className="w-3.5 h-3.5 stroke-[2.5]" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDelete(ann.id, e)}
+                          className="p-1 hover:bg-rose-500 hover:text-white rounded transition cursor-pointer text-red-600"
+                          title="Hapus Objek"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 stroke-[2.5]" />
+                        </button>
+                      </div>
                     )}
 
-                    {/* 2. Whiteout Box */}
+                    {/* CONTENT RENDERER */}
+
+                    {/* Type 1 & 2: Text Box (Baru & Edit Teks Asli) */}
+                    {isTextType && (
+                      <div className="relative w-full h-full">
+                        {/* Jika edit teks asli: berikan latar putih solid di bawahnya untuk menutup teks cetak lama */}
+                        {ann.isExistingPdfText && (
+                          <div className="absolute inset-0 bg-white shadow-xs pointer-events-none -z-10 rounded" />
+                        )}
+                        <textarea
+                          ref={isSelected ? activeInputRef : undefined}
+                          rows={1}
+                          value={ann.text ?? ''}
+                          placeholder="Type your text"
+                          onChange={(e) => {
+                            handleTextChange(ann.id, e.target.value);
+                            e.target.style.height = 'auto';
+                            e.target.style.height = `${e.target.scrollHeight}px`;
+                          }}
+                          onBlur={() => pushHistory(annotations)}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          style={{
+                            fontSize: `${((ann.fontSize || 14) * scale)}px`,
+                            fontFamily: ann.fontFamily || 'Helvetica, Arial, sans-serif',
+                            color: ann.color || '#000000',
+                            fontWeight: ann.isBold ? 800 : 500,
+                            fontStyle: ann.isItalic ? 'italic' : 'normal',
+                            lineHeight: '1.2'
+                          }}
+                          className={`w-full bg-transparent resize-none overflow-hidden outline-none border-none p-0.5 m-0 block whitespace-pre-wrap ${
+                            isSelected ? 'selection:bg-blue-600 selection:text-white' : ''
+                          }`}
+                        />
+                      </div>
+                    )}
+
+                    {/* Type 3: Whiteout Box */}
                     {ann.type === 'whiteout' && (
                       <div className="w-full h-full bg-white shadow-sm border border-slate-300" />
                     )}
 
-                    {/* 3. Highlight Box */}
+                    {/* Type 4: Highlight Box */}
                     {ann.type === 'highlight' && (
                       <div
                         className="w-full h-full opacity-60"
@@ -2376,7 +2612,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       />
                     )}
 
-                    {/* 4. Strikeout Line */}
+                    {/* Type 5: Strikeout Line */}
                     {ann.type === 'strikeout' && (
                       <div className="w-full h-full flex items-center">
                         <div
@@ -2386,7 +2622,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       </div>
                     )}
 
-                    {/* 5. Underline Line */}
+                    {/* Type 6: Underline Line */}
                     {ann.type === 'underline' && (
                       <div className="w-full h-full flex items-end">
                         <div
@@ -2396,7 +2632,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       </div>
                     )}
 
-                    {/* 6. Shape Rect */}
+                    {/* Type 7: Shape Rect */}
                     {ann.type === 'rect' && (
                       <div
                         className="w-full h-full border-2"
@@ -2404,7 +2640,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       />
                     )}
 
-                    {/* 7. Shape Circle */}
+                    {/* Type 8: Shape Circle */}
                     {ann.type === 'circle' && (
                       <div
                         className="w-full h-full border-2 rounded-full"
@@ -2412,7 +2648,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       />
                     )}
 
-                    {/* 8. Shape Line */}
+                    {/* Type 9: Shape Line */}
                     {ann.type === 'line' && (
                       <div
                         className="w-full h-[2px]"
@@ -2420,7 +2656,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       />
                     )}
 
-                    {/* 9. Shape Arrow */}
+                    {/* Type 10: Shape Arrow */}
                     {ann.type === 'arrow' && (
                       <div className="w-full h-full flex items-center relative">
                         <div
@@ -2434,7 +2670,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       </div>
                     )}
 
-                    {/* 10. Stamp Badge */}
+                    {/* Type 11: Stamp Badge */}
                     {ann.type === 'stamp' && (
                       <div
                         className="w-full h-full border-[3px] rounded-xl flex items-center justify-center font-black tracking-wider uppercase px-2 shadow-neo-sm"
@@ -2449,7 +2685,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       </div>
                     )}
 
-                    {/* 11. Form Fields */}
+                    {/* Type 12: Form Fields */}
                     {ann.type === 'form' && (
                       <div className="w-full h-full">
                         {ann.formType === 'checkbox' && (
@@ -2513,7 +2749,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       </div>
                     )}
 
-                    {/* 12. Freehand strokes */}
+                    {/* Type 13: Freehand strokes */}
                     {ann.type === 'freehand' && ann.points && (
                       <svg
                         className="w-full h-full overflow-visible pointer-events-none"
@@ -2532,14 +2768,14 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       </svg>
                     )}
 
-                    {/* 13. Hyperlink */}
+                    {/* Type 14: Hyperlink Box */}
                     {ann.type === 'link' && (
                       <div className="w-full h-full bg-sky-200/40 border-2 border-dashed border-sky-500 rounded p-1 flex items-center justify-center text-[10px] font-bold text-sky-800">
                         {ann.url}
                       </div>
                     )}
 
-                    {/* 14. Signature or Image Stamp */}
+                    {/* Type 15: Signature or Image Stamp */}
                     {(ann.type === 'signature' || ann.type === 'image') && ann.imageData && (
                       <img
                         src={ann.imageData}
@@ -2548,8 +2784,8 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       />
                     )}
 
-                    {/* 4-CORNER RESIZE HANDLES (MINIMALIST SEJDA STYLE) */}
-                    {isSelected && ann.type !== 'text' && (
+                    {/* 4-CORNER RESIZE HANDLES (MINIMALIST FOR SHAPES/IMAGES) */}
+                    {isSelected && !isTextType && (
                       <>
                         <div
                           onMouseDown={(e) => handleMouseDownItem(e, ann.id, 'resize', 'tl')}
