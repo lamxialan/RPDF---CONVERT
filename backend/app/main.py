@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, status
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, status, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
@@ -181,25 +181,37 @@ async def merge_pdf_endpoint(files: List[UploadFile] = File(...)):
     }
 
 @app.post("/api/pdf/compress")
-async def compress_pdf_endpoint(file: UploadFile = File(...)):
+async def compress_pdf_endpoint(
+    response: Response,
+    file: UploadFile = File(...),
+    compression_level: str = Form("recommended")
+):
     contents = await file.read()
     job_id = str(uuid.uuid4())
-    output_filename = f"{job_id}_out.pdf"
-    output_path = os.path.join(STORAGE_DIR, output_filename)
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_in.pdf")
+    output_path = os.path.join(STORAGE_DIR, f"{job_id}_out.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
 
     try:
-        from pypdf import PdfReader, PdfWriter
-        reader = PdfReader(io.BytesIO(contents))
-        writer = PdfWriter()
-        for page in reader.pages:
-            page.compress_content_streams()
-            writer.add_page(page)
-
-        with open(output_path, "wb") as f:
-            writer.write(f)
-    except Exception:
+        from app.pdf_tools import compress_pdf_file
+        orig_size, compressed_size, saved_percent = await asyncio.to_thread(
+            compress_pdf_file, input_path, output_path, compression_level
+        )
+    except Exception as e:
+        logger.error(f"Gagal mengompres PDF via PyMuPDF: {e}")
         with open(output_path, "wb") as f:
             f.write(contents)
+        orig_size = len(contents)
+        compressed_size = orig_size
+        saved_percent = 0.0
+    finally:
+        if os.path.exists(input_path):
+            try:
+                os.remove(input_path)
+            except Exception:
+                pass
 
     safe_name = f"compressed_{file.filename or 'document.pdf'}"
     jobs_db[job_id] = {
@@ -210,10 +222,9 @@ async def compress_pdf_endpoint(file: UploadFile = File(...)):
         "output_path": output_path
     }
 
-    orig_size = len(contents)
-    compressed_size = os.path.getsize(output_path) if os.path.exists(output_path) else orig_size
-    saved_bytes = max(0, orig_size - compressed_size)
-    saved_percent = round((saved_bytes / orig_size) * 100, 1) if orig_size > 0 else 0
+    # Set custom headers
+    response.headers["X-Original-Size"] = str(orig_size)
+    response.headers["X-Compressed-Size"] = str(compressed_size)
 
     return {
         "job_id": job_id,
@@ -223,7 +234,8 @@ async def compress_pdf_endpoint(file: UploadFile = File(...)):
         "download_name": safe_name,
         "original_size": orig_size,
         "compressed_size": compressed_size,
-        "saved_percent": saved_percent
+        "saved_percent": saved_percent,
+        "compression_level": compression_level
     }
 
 @app.post("/api/pdf/to-docx")

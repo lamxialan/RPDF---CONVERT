@@ -44,6 +44,12 @@ interface ToolConfig {
   multiple: boolean;
 }
 
+interface ToastNotification {
+  id: string;
+  type: 'error' | 'success' | 'info';
+  message: string;
+}
+
 export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' }) => {
   const [activeMode, setActiveMode] = useState<PdfToolMode>(initialMode);
   const [files, setFiles] = useState<File[]>([]);
@@ -51,8 +57,8 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadName, setDownloadName] = useState<string>('document.pdf');
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [alertMessage, setAlertMessage] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<ToastNotification[]>([]);
+  const [compressionLevel, setCompressionLevel] = useState<'recommended' | 'extreme'>('recommended');
   const [compressionStats, setCompressionStats] = useState<{
     originalSize: number;
     compressedSize: number;
@@ -83,25 +89,18 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
     }
   }, [initialMode]);
 
-  // Auto-clear alert notification setelah 6 detik
-  useEffect(() => {
-    if (alertMessage) {
-      const timer = setTimeout(() => {
-        setAlertMessage(null);
-      }, 6000);
-      return () => clearTimeout(timer);
-    }
-  }, [alertMessage]);
+  // Floating Toast Helper (Auto-dismiss 5 detik)
+  const showToast = (message: string, type: 'error' | 'success' | 'info' = 'error') => {
+    const id = Date.now().toString() + Math.random().toString(36).substring(2, 6);
+    setToasts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000);
+  };
 
-  // Auto-clear success message setelah 6 detik
-  useEffect(() => {
-    if (successMessage) {
-      const timer = setTimeout(() => {
-        setSuccessMessage(null);
-      }, 6000);
-      return () => clearTimeout(timer);
-    }
-  }, [successMessage]);
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  };
 
   // Geser urutan berkas ke atas
   const moveFileUp = (idx: number) => {
@@ -131,8 +130,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
   const handleModeSwitch = (mode: PdfToolMode) => {
     setActiveMode(mode);
     setDownloadUrl(null);
-    setSuccessMessage(null);
-    setAlertMessage(null);
+    setCompressionStats(null);
     if (mode !== 'merge' && files.length > 1) {
       setFiles([files[0]]);
     }
@@ -224,17 +222,15 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
   const currentTool = tools.find(t => t.id === activeMode) || tools[0];
 
   const handleFiles = (incoming: FileList | File[]) => {
-    setAlertMessage(null);
-    setSuccessMessage(null);
     const valid: File[] = [];
     for (let i = 0; i < incoming.length; i++) {
       const f = incoming[i];
       if (!f.name.toLowerCase().endsWith('.pdf')) {
-        setAlertMessage(`File "${f.name}" bukan PDF. Modul ini hanya memproses dokumen .pdf.`);
+        showToast(`File "${f.name}" bukan PDF. Modul ini hanya memproses dokumen .pdf.`, 'error');
         continue;
       }
       if (f.size > 25 * 1024 * 1024) {
-        setAlertMessage(`File "${f.name}" melebihi batas ukuran 25MB.`);
+        showToast(`File "${f.name}" melebihi batas ukuran 25MB.`, 'error');
         continue;
       }
       valid.push(f);
@@ -248,7 +244,6 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
       }
     }
     setDownloadUrl(null);
-    setSuccessMessage(null);
   };
 
   const removeFile = (idx: number) => {
@@ -259,32 +254,30 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
   const clearAll = () => {
     setFiles([]);
     setDownloadUrl(null);
-    setSuccessMessage(null);
+    setCompressionStats(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const executeAction = async () => {
     if (files.length === 0) {
-      setAlertMessage('Silakan pilih atau unggah dokumen PDF terlebih dahulu.');
+      showToast('Silakan pilih atau unggah dokumen PDF terlebih dahulu.', 'error');
       return;
     }
 
     if (activeMode === 'merge' && files.length < 2) {
-      setAlertMessage('Minimal butuh 2 file PDF untuk digabungkan.');
+      showToast('Minimal butuh 2 file PDF untuk digabungkan.', 'error');
       return;
     }
 
     if ((activeMode === 'protect' || activeMode === 'unlock') && !password.trim()) {
-      setAlertMessage('Masukkan kata sandi (password) untuk melanjutkan.');
+      showToast('Masukkan kata sandi (password) untuk melanjutkan.', 'error');
       return;
     }
 
     setIsProcessing(true);
-    setAlertMessage(null);
     setDownloadUrl(null);
 
     const formData = new FormData();
-
     let endpoint = '';
 
     switch (activeMode) {
@@ -307,6 +300,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
       case 'compress':
         endpoint = '/api/pdf/compress';
         formData.append('file', files[0]);
+        formData.append('compression_level', compressionLevel);
         break;
 
       case 'protect':
@@ -354,12 +348,12 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
       const data = await res.json();
       setDownloadUrl(getApiUrl(data.download_url));
       setDownloadName(data.download_name || 'document.pdf');
-      setSuccessMessage(data.message || 'Pemrosesan dokumen PDF berhasil!');
+      showToast(data.message || 'Pemrosesan dokumen PDF berhasil!', 'success');
 
       if (activeMode === 'compress') {
-        const orig = data.original_size || files[0]?.size || 4200000;
-        const comp = data.compressed_size || Math.max(1024, Math.round(orig * 0.38));
-        const saved = data.saved_percent !== undefined ? data.saved_percent : Number((((orig - comp) / orig) * 100).toFixed(1));
+        const orig = data.original_size || files[0]?.size || 1024;
+        const comp = data.compressed_size || orig;
+        const saved = orig > 0 ? Math.max(0, Math.round(((orig - comp) / orig) * 100)) : 0;
         setCompressionStats({
           originalSize: orig,
           compressedSize: comp,
@@ -367,7 +361,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
         });
       }
     } catch (err: any) {
-      setAlertMessage(err.message || 'Terjadi kesalahan sistem saat memproses dokumen.');
+      showToast(err.message || 'Terjadi kesalahan sistem saat memproses dokumen.', 'error');
     } finally {
       setIsProcessing(false);
     }
@@ -382,21 +376,40 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
   return (
     <div className="w-full max-w-5xl mx-auto">
       
-      {/* Alert Error Box */}
-      {alertMessage && (
-        <div className="mb-6 p-4 bg-neo-yellow border-[3px] border-black rounded-2xl shadow-neo flex items-center justify-between gap-3 text-black animate-shake">
-          <div className="flex items-center gap-2.5 text-xs sm:text-sm font-black">
-            <AlertCircle className="w-5 h-5 text-black stroke-[3] flex-shrink-0" />
-            <span>{alertMessage}</span>
-          </div>
-          <button
-            onClick={() => setAlertMessage(null)}
-            className="p-1 bg-white border-2 border-black rounded-lg hover:bg-slate-200 transition"
+      {/* Floating Toast Notification Container (Top Right - Eliminates Layout Shift) */}
+      <div className="fixed top-20 sm:top-24 right-4 sm:right-6 z-50 flex flex-col gap-2.5 max-w-sm sm:max-w-md w-full pointer-events-none">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`pointer-events-auto p-4 border-[3px] border-black rounded-2xl shadow-neo flex items-start justify-between gap-3 text-black animate-toast ${
+              toast.type === 'error'
+                ? 'bg-neo-yellow'
+                : toast.type === 'success'
+                ? 'bg-neo-green'
+                : 'bg-neo-blue'
+            }`}
           >
-            <X className="w-4 h-4 stroke-[3]" />
-          </button>
-        </div>
-      )}
+            <div className="flex items-start gap-2.5 text-xs sm:text-sm font-black">
+              {toast.type === 'error' ? (
+                <AlertCircle className="w-5 h-5 text-black stroke-[3] flex-shrink-0 mt-0.5" />
+              ) : toast.type === 'success' ? (
+                <CheckCircle2 className="w-5 h-5 text-black stroke-[3] flex-shrink-0 mt-0.5" />
+              ) : (
+                <Sparkles className="w-5 h-5 text-black stroke-[3] flex-shrink-0 mt-0.5" />
+              )}
+              <span className="leading-snug">{toast.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => removeToast(toast.id)}
+              className="p-1 bg-white border-2 border-black rounded-lg hover:bg-slate-200 transition cursor-pointer flex-shrink-0"
+              title="Tutup Notifikasi"
+            >
+              <X className="w-3.5 h-3.5 stroke-[3]" />
+            </button>
+          </div>
+        ))}
+      </div>
 
       {/* Tool Navigation Bar (Neo-Brutalist Grid Buttons) */}
       <div className="mb-8">
@@ -464,6 +477,74 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
 
         {/* Dynamic Tool Specific Configuration / Inputs */}
         <div className="mb-6">
+
+          {/* Mode: Compress PDF Preset Selector */}
+          {activeMode === 'compress' && (
+            <div className="bg-[#FAF5FF] border-2 border-black rounded-2xl p-4 sm:p-5 shadow-neo-sm mb-4">
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <label className="block text-xs font-black uppercase tracking-wider text-black">
+                  PILIH TINGKAT KOMPRESI:
+                </label>
+                <span className="text-[10px] font-black uppercase bg-purple-200 border border-purple-900 px-2 py-0.5 rounded shadow-neo-sm">
+                  PyMuPDF Real Engine
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Preset 1: Rekomendasi */}
+                <button
+                  type="button"
+                  onClick={() => setCompressionLevel('recommended')}
+                  className={`p-3.5 border-2 border-black rounded-xl text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                    compressionLevel === 'recommended'
+                      ? 'bg-neo-yellow shadow-neo ring-2 ring-black translate-x-[-1px] translate-y-[-1px]'
+                      : 'bg-white hover:bg-slate-50 shadow-neo-sm'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-4 h-4 rounded-full border-2 border-black flex items-center justify-center ${compressionLevel === 'recommended' ? 'bg-black' : 'bg-white'}`}>
+                        {compressionLevel === 'recommended' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                      </span>
+                      <span className="font-black text-xs sm:text-sm text-black">Rekomendasi</span>
+                    </div>
+                    <span className="text-[10px] font-black bg-white border border-black px-1.5 py-0.5 rounded shadow-neo-sm">
+                      STANDAR SEIMBANG
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-bold text-slate-700 leading-snug">
+                    Kualitas seimbang, teks & gambar tetap tajam. Reduksi ukuran ~40-60%. Cocok untuk dokumen kantor & arsip.
+                  </p>
+                </button>
+
+                {/* Preset 2: Ekstrem */}
+                <button
+                  type="button"
+                  onClick={() => setCompressionLevel('extreme')}
+                  className={`p-3.5 border-2 border-black rounded-xl text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                    compressionLevel === 'extreme'
+                      ? 'bg-neo-pink shadow-neo ring-2 ring-black translate-x-[-1px] translate-y-[-1px]'
+                      : 'bg-white hover:bg-slate-50 shadow-neo-sm'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-4 h-4 rounded-full border-2 border-black flex items-center justify-center ${compressionLevel === 'extreme' ? 'bg-black' : 'bg-white'}`}>
+                        {compressionLevel === 'extreme' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                      </span>
+                      <span className="font-black text-xs sm:text-sm text-black">Ekstrem</span>
+                    </div>
+                    <span className="text-[10px] font-black bg-black text-white px-1.5 py-0.5 rounded shadow-neo-sm">
+                      SUPER KECIL
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-bold text-slate-700 leading-snug">
+                    Kompresi maksimal, gambar dioptimalkan drastis. Cocok untuk Berkas CPNS, BKN, & Pendaftaran Online (maks. 200-500KB).
+                  </p>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Mode 1: PDF to Word Info Badge */}
           {activeMode === 'to-docx' && (
@@ -878,11 +959,11 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
             </div>
 
             {/* Action CTA Button */}
-            <div className="mt-6 pt-5 border-t-[3px] border-black flex items-center justify-end gap-3">
+            <div className="mt-6 pt-5 border-t-[3px] border-black flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3">
               <button
                 onClick={executeAction}
                 disabled={isProcessing || (currentTool.multiple && files.length < 2)}
-                className={`px-6 py-3 ${currentTool.color} border-2 border-black rounded-xl font-black text-xs sm:text-sm shadow-neo hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-neo-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50`}
+                className={`w-full sm:w-auto px-6 py-3.5 min-h-[48px] justify-center ${currentTool.color} border-2 border-black rounded-xl font-black text-xs sm:text-sm shadow-neo hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-neo-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50`}
               >
                 {isProcessing ? (
                   <>
@@ -900,7 +981,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                         : activeMode === 'merge'
                         ? `GABUNGKAN ${files.length} DOKUMEN PDF`
                         : activeMode === 'compress'
-                        ? 'MULAI KOMPRESI PDF'
+                        ? `MULAI KOMPRESI (${compressionLevel === 'extreme' ? 'EKSTREM' : 'REKOMENDASI'})`
                         : activeMode === 'protect'
                         ? 'KUNCI DOKUMEN DENGAN PASSWORD'
                         : activeMode === 'unlock'
@@ -924,11 +1005,11 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                       <Minimize2 className="w-4 h-4 stroke-[3]" />
                     </span>
                     <span className="text-xs sm:text-sm font-black uppercase text-black tracking-wide">
-                      HASIL KOMPRESI DOKUMEN PDF
+                      HASIL KOMPRESI DOKUMEN PDF ({compressionLevel === 'extreme' ? 'PRESET EKSTREM' : 'PRESET REKOMENDASI'})
                     </span>
                   </div>
                   <span className="bg-neo-green text-black border border-black px-3 py-1 rounded-full text-xs font-black shadow-neo-sm animate-pulse">
-                    HEMAT {compressionStats?.savedPercent ?? 62}%
+                    HEMAT {compressionStats?.savedPercent ?? 0}%
                   </span>
                 </div>
 
@@ -936,55 +1017,69 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                   <div className="bg-white border-2 border-black rounded-xl p-3 shadow-neo-sm">
                     <p className="text-[10px] font-black uppercase text-slate-600">Ukuran Asli</p>
                     <p className="text-base font-black text-black font-mono mt-0.5">
-                      {formatFileSize(compressionStats?.originalSize ?? files[0]?.size ?? 4200000)}
+                      {formatFileSize(compressionStats?.originalSize ?? files[0]?.size ?? 0)}
                     </p>
                   </div>
                   <div className="bg-white border-2 border-black rounded-xl p-3 shadow-neo-sm">
                     <p className="text-[10px] font-black uppercase text-slate-600">Setelah Kompresi</p>
                     <p className="text-base font-black text-emerald-700 font-mono mt-0.5">
-                      {formatFileSize(compressionStats?.compressedSize ?? Math.round((files[0]?.size || 4200000) * 0.38))}
+                      {formatFileSize(compressionStats?.compressedSize ?? 0)}
                     </p>
                   </div>
                   <div className="bg-white border-2 border-black rounded-xl p-3 shadow-neo-sm">
                     <p className="text-[10px] font-black uppercase text-slate-600">Ruang Dihemat</p>
                     <p className="text-base font-black text-black font-mono mt-0.5">
-                      {compressionStats?.savedPercent ?? 62}% Saved
+                      {compressionStats?.savedPercent ?? 0}% Saved
                     </p>
                   </div>
                 </div>
 
                 <div className="p-3 bg-white border-2 border-black rounded-xl flex items-center justify-between shadow-neo-sm">
                   <p className="text-xs sm:text-sm font-black text-black">
-                    Original: <span className="font-mono">{formatFileSize(compressionStats?.originalSize ?? files[0]?.size ?? 4200000)}</span> → Compressed: <span className="text-emerald-700 font-mono">{formatFileSize(compressionStats?.compressedSize ?? Math.round((files[0]?.size || 4200000) * 0.38))}</span> | Saved {compressionStats?.savedPercent ?? 62}%
+                    Original: <span className="font-mono">{formatFileSize(compressionStats?.originalSize ?? files[0]?.size ?? 0)}</span> → Compressed: <span className="text-emerald-700 font-mono">{formatFileSize(compressionStats?.compressedSize ?? 0)}</span> | Saved {compressionStats?.savedPercent ?? 0}%
                   </p>
                 </div>
               </div>
             )}
 
-            {/* Success Download Card */}
+            {/* Success Download Card & Quick Reset Action */}
             {downloadUrl && (
-              <div className="mt-6 p-5 sm:p-6 bg-neo-green border-[3px] border-black rounded-2xl shadow-neo flex flex-col sm:flex-row items-center justify-between gap-4 animate-fadeIn">
-                <div className="flex items-center gap-3.5 text-black">
-                  <div className="w-10 h-10 bg-white border-2 border-black rounded-xl flex items-center justify-center flex-shrink-0 shadow-neo-sm">
-                    <CheckCircle2 className="w-6 h-6 stroke-[3] text-black" />
+              <div className="mt-6 space-y-3 animate-fadeIn">
+                <div className="p-5 sm:p-6 bg-neo-green border-[3px] border-black rounded-2xl shadow-neo flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3.5 text-black">
+                    <div className="w-10 h-10 bg-white border-2 border-black rounded-xl flex items-center justify-center flex-shrink-0 shadow-neo-sm">
+                      <CheckCircle2 className="w-6 h-6 stroke-[3] text-black" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-black uppercase">
+                        PROSES SELESAI DENGAN SUKSES!
+                      </p>
+                      <p className="text-xs font-bold mt-0.5 text-slate-800 truncate max-w-xs sm:max-w-md">
+                        File siap diunduh: <span className="font-mono underline">{downloadName}</span>
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-sm font-black uppercase">
-                      {successMessage || 'Proses Berhasil!'}
-                    </p>
-                    <p className="text-xs font-bold mt-0.5 text-slate-800">
-                      File siap diunduh: <span className="font-mono underline">{downloadName}</span>
-                    </p>
-                  </div>
+                  <a
+                    href={downloadUrl}
+                    download={downloadName}
+                    className="w-full sm:w-auto px-6 py-3.5 min-h-[44px] bg-white border-2 border-black rounded-xl text-black font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-neo hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-neo-sm transition-all"
+                  >
+                    <Download className="w-4 h-4 stroke-[3]" />
+                    <span>UNDUH FILE HASIL</span>
+                  </a>
                 </div>
-                <a
-                  href={downloadUrl}
-                  download={downloadName}
-                  className="w-full sm:w-auto px-6 py-3 bg-white border-2 border-black rounded-xl text-black font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-neo hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-neo-sm transition-all"
-                >
-                  <Download className="w-4 h-4 stroke-[3]" />
-                  <span>UNDUH FILE HASIL</span>
-                </a>
+
+                {/* Quick Reset: Konversi Berkas Lain */}
+                <div className="flex justify-center pt-1">
+                  <button
+                    type="button"
+                    onClick={clearAll}
+                    className="w-full sm:w-auto px-6 py-3 min-h-[44px] bg-white border-2 border-black rounded-xl font-black text-xs sm:text-sm text-black shadow-neo hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-neo-sm hover:bg-slate-100 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <RotateCcw className="w-4 h-4 stroke-[2.5]" />
+                    <span>Konversi Berkas Lain</span>
+                  </button>
+                </div>
               </div>
             )}
 

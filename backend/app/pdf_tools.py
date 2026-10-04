@@ -70,9 +70,97 @@ def split_pdf_pages(input_path: str, output_path: str, page_range_str: str) -> i
 
     return len(pages_to_keep)
 
+def compress_pdf_file(input_path: str, output_path: str, compression_level: str = "recommended") -> tuple[int, int, float]:
+    """
+    Mengompres file PDF menggunakan PyMuPDF (fitz) dengan optimasi objek, font,
+    dan kompresi ulang gambar (JPEG re-encoding) untuk reduksi ukuran riil yang signifikan.
+    Preset:
+    - 'recommended': Kualitas standar seimbang (Quality ~75, max_dim 1600)
+    - 'extreme': Ukuran super kecil (Quality ~60, max_dim 1000)
+    """
+    orig_size = os.path.getsize(input_path) if os.path.exists(input_path) else 0
+
+    try:
+        import fitz
+        from PIL import Image
+
+        doc = fitz.open(input_path)
+
+        quality = 75 if compression_level == "recommended" else 60
+        max_dim = 1600 if compression_level == "recommended" else 1000
+
+        # Optimasi dan kompres ulang gambar yang tersemat di PDF
+        for page_idx in range(len(doc)):
+            page = doc[page_idx]
+            for img_info in page.get_images(full=True):
+                xref = img_info[0]
+                try:
+                    base_image = doc.extract_image(xref)
+                    if not base_image:
+                        continue
+                    image_bytes = base_image["image"]
+                    
+                    pil_img = Image.open(io.BytesIO(image_bytes))
+                    
+                    # Resize jika dimensi gambar terlalu besar
+                    if pil_img.width > max_dim or pil_img.height > max_dim:
+                        pil_img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+
+                    if pil_img.mode in ("RGBA", "LA", "P"):
+                        if "A" in pil_img.mode:
+                            bg = Image.new("RGB", pil_img.size, (255, 255, 255))
+                            bg.paste(pil_img, mask=pil_img.split()[-1])
+                            pil_img = bg
+                        else:
+                            pil_img = pil_img.convert("RGB")
+                    elif pil_img.mode != "RGB":
+                        pil_img = pil_img.convert("RGB")
+
+                    out_buffer = io.BytesIO()
+                    pil_img.save(out_buffer, format="JPEG", quality=quality, optimize=True)
+                    new_image_bytes = out_buffer.getvalue()
+
+                    if len(new_image_bytes) < len(image_bytes):
+                        try:
+                            doc.update_stream(xref, new_image_bytes)
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+
+        doc.save(
+            output_path,
+            deflate=True,
+            deflate_images=True,
+            deflate_fonts=True,
+            garbage=4,
+            clean=True
+        )
+        doc.close()
+
+    except Exception:
+        # Fallback ke pypdf jika fitz tidak tersedia atau dokumen spesifik
+        reader = PdfReader(input_path)
+        writer = PdfWriter()
+        for page in reader.pages:
+            try:
+                page.compress_content_streams()
+            except Exception:
+                pass
+            writer.add_page(page)
+
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+    compressed_size = os.path.getsize(output_path) if os.path.exists(output_path) else orig_size
+    saved_bytes = max(0, orig_size - compressed_size)
+    saved_percent = round((saved_bytes / orig_size) * 100, 1) if orig_size > 0 else 0.0
+
+    return orig_size, compressed_size, saved_percent
+
 def protect_pdf_file(input_path: str, output_path: str, password: str):
     """
-    Mengunci file PDF dengan enkripsi password standar industri (AES 128-bit).
+    Mengunci file PDF dengan enkripsi password standar industri (pypdf modern encrypt).
     """
     if not password:
         raise ValueError("Password tidak boleh kosong.")
@@ -83,7 +171,7 @@ def protect_pdf_file(input_path: str, output_path: str, password: str):
     for page in reader.pages:
         writer.add_page(page)
 
-    writer.encrypt(user_password=password, owner_pwd=None, use_128bit=True)
+    writer.encrypt(user_password=password, owner_password=password)
 
     with open(output_path, "wb") as f:
         writer.write(f)

@@ -353,6 +353,8 @@ const server = http.createServer((req, res) => {
       const buffer = Buffer.concat(chunks);
       const parts = parseMultipart(buffer, boundary);
       const filePart = parts.find(p => p.filename);
+      const levelPart = parts.find(p => p.name === 'compression_level');
+      const compressionLevel = levelPart ? levelPart.data.toString().trim().toLowerCase() : 'recommended';
 
       if (!filePart || !filePart.data) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -368,8 +370,9 @@ const server = http.createServer((req, res) => {
       fs.writeFileSync(outputPath, filePart.data);
 
       const origSize = filePart.data.length;
-      // Perkiraan simulasi reduksi 40-70% untuk file mock atau file kompresi
-      const compressedSize = Math.max(1024, Math.round(origSize * 0.38));
+      // Perkiraan simulasi reduksi: recommended ~45-55% saved, extreme ~70-80% saved
+      const ratio = compressionLevel === 'extreme' ? 0.28 : 0.52;
+      const compressedSize = Math.max(1024, Math.round(origSize * ratio));
       const savedBytes = Math.max(0, origSize - compressedSize);
       const savedPercent = origSize > 0 ? Number(((savedBytes / origSize) * 100).toFixed(1)) : 0;
 
@@ -382,7 +385,11 @@ const server = http.createServer((req, res) => {
         download_url: `/api/download/${jobId}`
       });
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'X-Original-Size': String(origSize),
+        'X-Compressed-Size': String(compressedSize)
+      });
       res.end(JSON.stringify({
         job_id: jobId,
         status: 'completed',
@@ -391,7 +398,8 @@ const server = http.createServer((req, res) => {
         download_name: downloadName,
         original_size: origSize,
         compressed_size: compressedSize,
-        saved_percent: savedPercent
+        saved_percent: savedPercent,
+        compression_level: compressionLevel
       }));
     });
     return;
