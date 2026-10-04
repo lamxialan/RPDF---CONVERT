@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+**/node_modules/
+package-lock.json.bak
+
+# Build outputs
+dist/
+**/dist/
+build/
+**/build/
+out/
+.next/
+
+# Temporary storage & Uploads
+temp_storage/*
+**/temp_storage/*
+!**/temp_storage/.gitkeep
+uploads/
+**/uploads/*
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.env.*
+!.env.example
+.venv/
+env/
+venv/
+ENV/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs & Cache
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+.cache/
+
+# OS and Editor metadata
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets & Keys
+*.pem
+*.key
+*.cert
