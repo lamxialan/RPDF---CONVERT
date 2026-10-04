@@ -15,6 +15,7 @@ import {
   ClipboardCopy
 } from 'lucide-react';
 import { getApiUrl } from '../config/api';
+import { LoadingModal } from './LoadingModal';
 
 type CutoutMode = 'auto' | 'white_bg' | 'ai';
 
@@ -25,6 +26,7 @@ export const RemoveBgConverter: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
+  const [previewBg, setPreviewBg] = useState<'checkerboard' | 'dark' | 'white'>('checkerboard');
   
   // Pengaturan Canggih Chroma-Key & AI Cutout
   const [mode, setMode] = useState<CutoutMode>('auto');
@@ -410,17 +412,19 @@ export const RemoveBgConverter: React.FC = () => {
               }
             }}
             onClick={() => fileInputRef.current?.click()}
-            className={`border-[3px] border-black border-dashed rounded-2xl p-8 sm:p-14 text-center cursor-pointer transition-all ${
+            className={`border-dashed rounded-2xl p-8 sm:p-14 text-center cursor-pointer transition-all duration-200 ${
               isDragging
-                ? 'bg-neo-pink/30 scale-[1.01]'
-                : 'bg-[#FFFDF8] hover:bg-slate-50'
+                ? 'bg-neo-yellow border-4 border-black scale-[1.02] shadow-neo-lg ring-4 ring-black/10'
+                : 'bg-[#FFFDF8] hover:bg-slate-50 border-[3px] border-black'
             }`}
           >
-            <div className="w-16 h-16 mx-auto mb-4 bg-neo-yellow border-2 border-black rounded-2xl flex items-center justify-center shadow-neo-sm">
+            <div className={`w-16 h-16 mx-auto mb-4 bg-neo-yellow border-2 border-black rounded-2xl flex items-center justify-center shadow-neo-sm ${isDragging ? 'animate-bounce' : ''}`}>
               <UploadCloud className="w-8 h-8 text-black stroke-[2.5]" />
             </div>
             <p className="text-base font-black text-black">
-              Tarik & Lepas foto ke sini, atau <span className="bg-neo-yellow px-2.5 py-1 border border-black rounded-lg underline">Pilih Foto</span>
+              {isDragging ? 'LEPAS FOTO DI SINI SEKARANG!' : (
+                <>Tarik & Lepas foto ke sini, atau <span className="bg-neo-yellow px-2.5 py-1 border border-black rounded-lg underline">Pilih Foto</span></>
+              )}
             </p>
             <p className="mt-2 text-xs font-bold text-slate-600">
               Mendukung PNG, JPG, JPEG, WEBP (Maksimal 25MB) • Ikon/Siluet Latar Putih Otomatis Transparan
@@ -492,29 +496,67 @@ export const RemoveBgConverter: React.FC = () => {
 
               {/* Box Kanan: Hasil Tanpa Background dengan Checkerboard */}
               <div className="bg-[#FFFDF8] border-2 border-black rounded-2xl p-4 shadow-neo-sm">
-                <div className="w-full flex items-center justify-between mb-2 text-xs font-black uppercase">
+                <div className="w-full flex items-center justify-between mb-2 text-xs font-black uppercase flex-wrap gap-1">
                   <div className="flex items-center gap-1.5 text-black">
                     <Sparkles className="w-3.5 h-3.5 stroke-[2.5]" />
                     <span>Hasil Transparan</span>
                   </div>
-                  <span className="bg-neo-pink text-black border border-black rounded-md px-2 py-0.5 text-[10px]">
-                    AFTER (.PNG)
-                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewBg('checkerboard')}
+                      className={`text-[9px] font-black px-1.5 py-0.5 rounded border border-black transition ${
+                        previewBg === 'checkerboard' ? 'bg-neo-yellow shadow-neo-sm' : 'bg-white hover:bg-slate-100'
+                      }`}
+                      title="Pola Papan Catur"
+                    >
+                      Catur
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewBg('dark')}
+                      className={`text-[9px] font-black px-1.5 py-0.5 rounded border border-black transition ${
+                        previewBg === 'dark' ? 'bg-slate-900 text-white shadow-neo-sm' : 'bg-white hover:bg-slate-100'
+                      }`}
+                      title="Latar Gelap"
+                    >
+                      Gelap
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewBg('white')}
+                      className={`text-[9px] font-black px-1.5 py-0.5 rounded border border-black transition ${
+                        previewBg === 'white' ? 'bg-slate-200 shadow-neo-sm' : 'bg-white hover:bg-slate-100'
+                      }`}
+                      title="Latar Putih"
+                    >
+                      Putih
+                    </button>
+                    <span className="bg-neo-pink text-black border border-black rounded-md px-1.5 py-0.5 text-[9px] font-black ml-1">
+                      .PNG
+                    </span>
+                  </div>
                 </div>
 
                 <div 
                   className="w-full h-64 sm:h-72 border-2 border-black rounded-xl flex items-center justify-center p-2 relative overflow-hidden"
-                  style={{
-                    backgroundImage: `
-                      linear-gradient(45deg, #cbd5e1 25%, transparent 25%),
-                      linear-gradient(-45deg, #cbd5e1 25%, transparent 25%),
-                      linear-gradient(45deg, transparent 75%, #cbd5e1 75%),
-                      linear-gradient(-45deg, transparent 75%, #cbd5e1 75%)
-                    `,
-                    backgroundSize: '16px 16px',
-                    backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
-                    backgroundColor: '#ffffff'
-                  }}
+                  style={
+                    previewBg === 'dark'
+                      ? { backgroundColor: '#0f172a' }
+                      : previewBg === 'white'
+                      ? { backgroundColor: '#ffffff' }
+                      : {
+                          backgroundImage: `
+                            linear-gradient(45deg, #94a3b8 25%, transparent 25%),
+                            linear-gradient(-45deg, #94a3b8 25%, transparent 25%),
+                            linear-gradient(45deg, transparent 75%, #94a3b8 75%),
+                            linear-gradient(-45deg, transparent 75%, #94a3b8 75%)
+                          `,
+                          backgroundSize: '20px 20px',
+                          backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px',
+                          backgroundColor: '#f8fafc'
+                        }
+                  }
                 >
                   {isProcessing ? (
                     <div className="flex flex-col items-center justify-center gap-3 text-center p-4 bg-white border-2 border-black rounded-xl shadow-neo-sm">
@@ -618,6 +660,13 @@ export const RemoveBgConverter: React.FC = () => {
         )}
 
       </div>
+
+      {/* Neo-Brutalist Loading Modal */}
+      <LoadingModal
+        isOpen={isProcessing}
+        title="MENGHAPUS LATAR BELAKANG..."
+        customMessage="Memisahkan objek foto & membersihkan saluran alpha..."
+      />
     </div>
   );
 };

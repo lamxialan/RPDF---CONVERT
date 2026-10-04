@@ -235,7 +235,9 @@ export const App: React.FC = () => {
             <span className="bg-neo-yellow border border-black px-2.5 py-1 rounded-lg">
               CLEANUP 1-JAM OTOMATIS
             </span>
-            <span>v2.5 RPDF PRO</span>
+            <span className="bg-white border border-black px-2.5 py-1 rounded-lg shadow-neo-sm font-black">
+              v1.5 RPDF PRO
+            </span>
           </div>
         </div>
       </footer>

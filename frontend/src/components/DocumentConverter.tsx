@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { FileItem, DOCUMENT_EXTENSIONS, DOCUMENT_TARGETS, IMAGE_EXTENSIONS } from '../types';
 import { getApiUrl } from '../config/api';
+import { LoadingModal } from './LoadingModal';
 
 interface DocumentConverterProps {
   onSwitchToImageTab?: () => void;
@@ -384,17 +385,19 @@ export const DocumentConverter: React.FC<DocumentConverterProps> = ({ onSwitchTo
           onDragLeave={onDragLeave}
           onDrop={onDrop}
           onClick={() => fileInputRef.current?.click()}
-          className={`border-[3px] border-black border-dashed rounded-2xl p-8 sm:p-12 text-center cursor-pointer transition-all ${
+          className={`border-dashed rounded-2xl p-8 sm:p-12 text-center cursor-pointer transition-all duration-200 ${
             isDragging
-              ? 'bg-neo-green/30 scale-[1.01]'
-              : 'bg-[#FFFDF8] hover:bg-slate-50'
+              ? 'bg-neo-yellow border-4 border-black scale-[1.02] shadow-neo-lg ring-4 ring-black/10'
+              : 'bg-[#FFFDF8] hover:bg-slate-50 border-[3px] border-black'
           }`}
         >
-          <div className="w-16 h-16 mx-auto mb-4 bg-neo-yellow border-2 border-black rounded-2xl flex items-center justify-center shadow-neo-sm">
+          <div className={`w-16 h-16 mx-auto mb-4 bg-neo-yellow border-2 border-black rounded-2xl flex items-center justify-center shadow-neo-sm ${isDragging ? 'animate-bounce' : ''}`}>
             <UploadCloud className="w-8 h-8 text-black stroke-[2.5]" />
           </div>
           <p className="text-base font-black text-black">
-            Tarik & Lepas dokumen ke sini, atau <span className="bg-neo-yellow px-2.5 py-1 border border-black rounded-lg underline">Pilih Dokumen</span>
+            {isDragging ? 'LEPAS DOKUMEN DI SINI SEKARANG!' : (
+              <>Tarik & Lepas dokumen ke sini, atau <span className="bg-neo-yellow px-2.5 py-1 border border-black rounded-lg underline">Pilih Dokumen</span></>
+            )}
           </p>
           <p className="mt-2 text-xs font-bold text-slate-600">
             Mendukung: PDF, DOCX, XLSX, PPTX, TXT (Maks. 25MB per file)
@@ -566,6 +569,9 @@ export const DocumentConverter: React.FC<DocumentConverterProps> = ({ onSwitchTo
         )}
 
       </div>
+
+      {/* Neo-Brutalist Loading Modal */}
+      <LoadingModal isOpen={isAnyProcessing} title="MENGONVERSI DOKUMEN..." />
     </div>
   );
 };

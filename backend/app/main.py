@@ -209,12 +209,20 @@ async def compress_pdf_endpoint(file: UploadFile = File(...)):
         "output_path": output_path
     }
 
+    orig_size = len(contents)
+    compressed_size = os.path.getsize(output_path) if os.path.exists(output_path) else orig_size
+    saved_bytes = max(0, orig_size - compressed_size)
+    saved_percent = round((saved_bytes / orig_size) * 100, 1) if orig_size > 0 else 0
+
     return {
         "job_id": job_id,
         "status": "completed",
         "download_url": f"/api/download/{job_id}",
         "message": "Dokumen PDF berhasil dioptimalkan.",
-        "download_name": safe_name
+        "download_name": safe_name,
+        "original_size": orig_size,
+        "compressed_size": compressed_size,
+        "saved_percent": saved_percent
     }
 
 @app.post("/api/pdf/to-docx")

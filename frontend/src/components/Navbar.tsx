@@ -85,6 +85,9 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onTabChange }) => {
 
           {/* Right Badge */}
           <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="hidden sm:inline bg-white border-2 border-black rounded-full px-2.5 py-0.5 text-[11px] font-black shadow-neo-sm text-black">
+              v1.5
+            </span>
             <div className="flex items-center gap-1.5 bg-neo-yellow border-2 border-black rounded-full px-3 py-1 text-xs font-black shadow-neo-sm text-black">
               <Zap className="w-3.5 h-3.5 stroke-[2.5] fill-black" />
               <span className="hidden sm:inline">100% FREE & PRIVATE</span>
