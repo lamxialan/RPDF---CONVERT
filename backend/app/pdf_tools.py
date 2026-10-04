@@ -427,3 +427,6 @@ def organize_and_rotate_pdf(input_path: str, output_path: str, delete_pages_str:
             writer.write(f)
         return kept
 
+# Re-export apply_pdf_annotations
+from app.converters import apply_pdf_annotations
+

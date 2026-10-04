@@ -665,6 +665,66 @@ async def organize_pdf_endpoint(
         "remaining_pages": remaining_count
     }
 
+@app.post("/api/pdf/edit-sign")
+@app.post("/api/pdf/annotate")
+async def edit_and_sign_pdf(
+    file: UploadFile = File(...),
+    annotations: str = Form("[]")
+):
+    contents = await file.read()
+    if len(contents) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Ukuran berkas melebihi batas maksimal 25MB")
+
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_in.pdf")
+    output_path = os.path.join(STORAGE_DIR, f"{job_id}_out.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        parsed_annotations = json.loads(annotations) if annotations else []
+    except Exception:
+        parsed_annotations = []
+
+    try:
+        from app.converters import apply_pdf_annotations
+        applied_count = await asyncio.to_thread(
+            apply_pdf_annotations,
+            input_path,
+            output_path,
+            parsed_annotations
+        )
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=400, detail=f"Gagal memproses anotasi & tanda tangan PDF: {e}")
+    finally:
+        if os.path.exists(input_path):
+            try:
+                os.remove(input_path)
+            except Exception:
+                pass
+
+    orig_stem = os.path.splitext(file.filename or "document")[0]
+    safe_name = f"{orig_stem}_signed.pdf"
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "download_name": safe_name,
+        "status": "completed",
+        "target_format": "pdf",
+        "output_path": output_path
+    }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "download_url": f"/api/download/{job_id}",
+        "message": f"Dokumen berhasil ditandatangani ({applied_count} anotasi diterapkan).",
+        "download_name": safe_name,
+        "applied_annotations": applied_count
+    }
+
 @app.post("/api/image/remove-bg")
 @app.post("/api/remove-bg")
 async def remove_bg_endpoint(

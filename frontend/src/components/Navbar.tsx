@@ -57,7 +57,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onTabChange }) => {
     },
     {
       id: 'pdf-tools',
-      label: 'Alat PDF (11-in-1)',
+      label: 'Alat PDF (12-in-1)',
       icon: <Layers className="w-4 h-4 stroke-[2.5]" />,
       color: 'bg-neo-yellow'
     }

@@ -318,3 +318,100 @@ def dispatch_conversion(input_path: str, output_path: str, source_ext: str, targ
 
     else:
         raise ValueError(f"Kombinasi konversi dari '{source_ext}' ke '{target_ext}' tidak didukung.")
+
+def apply_pdf_annotations(input_path: str, output_path: str, annotations: list) -> int:
+    """
+    Menyisipkan anotasi (teks, tanda tangan, stempel gambar, kotak whiteout)
+    ke dokumen PDF menggunakan PyMuPDF (fitz).
+    """
+    import fitz
+    import base64
+
+    doc = fitz.open(input_path)
+    total_pages = len(doc)
+    applied_count = 0
+
+    for ann in annotations:
+        if not isinstance(ann, dict):
+            continue
+
+        page_num = ann.get("page", 1)
+        # Normalisasi ke 0-indexed
+        try:
+            page_idx = int(page_num) - 1 if int(page_num) >= 1 else 0
+        except (ValueError, TypeError):
+            page_idx = 0
+
+        if page_idx < 0 or page_idx >= total_pages:
+            continue
+
+        page = doc[page_idx]
+        p_width = page.rect.width
+        p_height = page.rect.height
+
+        # Frontend scaling reference: jika ada page_width & page_height dari canvas
+        ref_w = float(ann.get("page_width") or p_width)
+        ref_h = float(ann.get("page_height") or p_height)
+        scale_x = (p_width / ref_w) if ref_w > 0 else 1.0
+        scale_y = (p_height / ref_h) if ref_h > 0 else 1.0
+
+        ann_type = str(ann.get("type", "text")).lower()
+        x = float(ann.get("x", 0)) * scale_x
+        y = float(ann.get("y", 0)) * scale_y
+        w = max(1.0, float(ann.get("width", 0)) * scale_x)
+        h = max(1.0, float(ann.get("height", 0)) * scale_y)
+
+        if ann_type == "text":
+            text = str(ann.get("text", "")).strip()
+            if not text:
+                continue
+            try:
+                raw_font_size = float(ann.get("fontSize", 14))
+            except (ValueError, TypeError):
+                raw_font_size = 14.0
+            font_size = max(8.0, raw_font_size * scale_y)
+            hex_color = str(ann.get("color", "#000000")).lstrip("#")
+            if len(hex_color) == 6:
+                try:
+                    r = int(hex_color[0:2], 16) / 255.0
+                    g = int(hex_color[2:4], 16) / 255.0
+                    b = int(hex_color[4:6], 16) / 255.0
+                    color = (r, g, b)
+                except ValueError:
+                    color = (0, 0, 0)
+            else:
+                color = (0, 0, 0)
+
+            rect = fitz.Rect(x, y, x + max(w, 250), y + max(h, font_size * 2))
+            try:
+                res = page.insert_textbox(rect, text, fontsize=font_size, color=color, fontname="helv")
+                if res < 0:
+                    page.insert_text(fitz.Point(x, y + font_size), text, fontsize=font_size, color=color, fontname="helv")
+            except Exception:
+                page.insert_text(fitz.Point(x, y + font_size), text, fontsize=font_size, color=color, fontname="helv")
+            applied_count += 1
+
+        elif ann_type == "whiteout":
+            # Kotak penutup putih untuk menutupi bagian teks lama
+            rect = fitz.Rect(x, y, x + w, y + h)
+            page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1), width=0)
+            applied_count += 1
+
+        elif ann_type in ["signature", "image", "stamp"]:
+            image_data = ann.get("imageData") or ann.get("image_data") or ann.get("data") or ""
+            if not image_data:
+                continue
+            if "," in image_data:
+                image_data = image_data.split(",", 1)[1]
+            try:
+                img_bytes = base64.b64decode(image_data)
+                rect = fitz.Rect(x, y, x + w, y + h)
+                page.insert_image(rect, stream=img_bytes)
+                applied_count += 1
+            except Exception:
+                pass
+
+    doc.save(output_path, deflate=True, garbage=4, clean=True)
+    doc.close()
+    return applied_count
+

@@ -25,11 +25,13 @@ import {
   ArrowUp,
   ArrowDown,
   Image as ImageIcon,
-  RotateCw
+  RotateCw,
+  PenTool
 } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import { PdfToolMode } from '../types';
 import { LoadingModal } from './LoadingModal';
+import { PdfSignEditor } from './PdfSignEditor';
 import { addRecentActivity } from '../utils/recentActivity';
 
 interface PdfUtilityProps {
@@ -58,6 +60,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [isEditorOpen, setIsEditorOpen] = useState<boolean>(false);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadName, setDownloadName] = useState<string>('document.pdf');
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
@@ -144,6 +147,16 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
   };
 
   const tools: ToolConfig[] = [
+    {
+      id: 'edit-sign',
+      name: 'Edit & Sign PDF',
+      badge: 'INTERAKTIF',
+      desc: 'Tulis teks, tanda tangan digital, stempel, & tutup teks.',
+      color: 'bg-rose-300',
+      borderColor: 'border-rose-900',
+      icon: <PenTool className="w-4 h-4 stroke-[2.5]" />,
+      multiple: false
+    },
     {
       id: 'to-docx',
       name: 'PDF ke Word',
@@ -288,6 +301,9 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
     } else {
       if (valid.length > 0) {
         setFiles([valid[0]]);
+        if (activeMode === 'edit-sign') {
+          setIsEditorOpen(true);
+        }
       }
     }
     setDownloadUrl(null);
@@ -315,6 +331,11 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
           : 'Silakan pilih dokumen PDF terlebih dahulu.',
         'error'
       );
+      return;
+    }
+
+    if (activeMode === 'edit-sign') {
+      setIsEditorOpen(true);
       return;
     }
 
@@ -499,7 +520,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
             <span>PILIH MODUL ALAT PDF</span>
           </div>
           <span className="text-xs font-bold text-slate-600 dark:text-slate-300 bg-white dark:bg-[#1E1E1E] border border-black dark:border-white px-2.5 py-0.5 rounded-md shadow-neo-sm">
-            11 FITUR LENGKAP
+            12 FITUR LENGKAP
           </span>
         </div>
 
@@ -557,6 +578,37 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
 
         {/* Dynamic Tool Specific Configuration / Inputs */}
         <div className="mb-6">
+
+          {/* Mode: Edit & Sign PDF Info Box & Launch Button */}
+          {activeMode === 'edit-sign' && (
+            <div className="bg-rose-50 dark:bg-rose-950/30 border-2 border-black dark:border-white rounded-2xl p-4 sm:p-5 shadow-neo-sm mb-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-neo-pink border-2 border-black flex items-center justify-center text-black flex-shrink-0 shadow-neo-sm">
+                    <PenTool className="w-5 h-5 stroke-[2.5]" />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-sm uppercase text-black dark:text-white">
+                      Editor Anotasi & Tanda Tangan Digital
+                    </h4>
+                    <p className="text-xs font-bold text-slate-700 dark:text-slate-300 mt-0.5 leading-relaxed">
+                      Tambahkan teks baru, gambar tanda tangan langsung dari layar sentuh/mouse, tempel stempel atau logo, dan tutup teks lama secara presisi.
+                    </p>
+                  </div>
+                </div>
+                {files.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsEditorOpen(true)}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-neo-yellow hover:bg-yellow-400 text-black border-2 border-black rounded-xl font-black text-xs uppercase flex items-center justify-center gap-2 shadow-neo active:translate-x-0.5 active:translate-y-0.5 transition-all flex-shrink-0 cursor-pointer"
+                  >
+                    <PenTool className="w-4 h-4 stroke-[2.5]" />
+                    <span>Buka Editor Interaktif</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Mode: Images to PDF Info Badge */}
           {activeMode === 'images-to-pdf' && (
@@ -1157,7 +1209,9 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                   <>
                     {currentTool.icon}
                     <span>
-                      {activeMode === 'to-docx'
+                      {activeMode === 'edit-sign'
+                        ? 'BUKA EDITOR & TANDATANGAN INTERAKTIF'
+                        : activeMode === 'to-docx'
                         ? 'KONVERSI KE WORD (.DOCX)'
                         : activeMode === 'images-to-pdf'
                         ? `GABUNGKAN ${files.length} GAMBAR KE PDF`
@@ -1276,6 +1330,20 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
         )}
 
       </div>
+
+      {/* Interactive Fullscreen PDF Annotation & Signature Editor */}
+      {files.length > 0 && (
+        <PdfSignEditor
+          file={files[0]}
+          isOpen={isEditorOpen}
+          onClose={() => setIsEditorOpen(false)}
+          onSuccess={(url, name) => {
+            setDownloadUrl(url);
+            setDownloadName(name);
+            showToast('Dokumen berhasil diedit dan ditandatangani!', 'success');
+          }}
+        />
+      )}
 
       {/* Neo-Brutalist Loading Modal */}
       <LoadingModal

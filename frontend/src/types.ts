@@ -11,7 +11,24 @@ export type PdfToolMode =
   | 'page-numbers'
   | 'images-to-pdf'
   | 'pdf-to-images'
-  | 'organize';
+  | 'organize'
+  | 'edit-sign';
+
+export interface PdfAnnotation {
+  id: string;
+  page: number; // 1-indexed
+  type: 'text' | 'signature' | 'image' | 'whiteout';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  page_width: number;
+  page_height: number;
+  text?: string;
+  fontSize?: number;
+  color?: string;
+  imageData?: string;
+}
 
 export interface RecentActivityItem {
   id: string;

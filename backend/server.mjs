@@ -885,6 +885,69 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Edit & Sign PDF Endpoint (PyMuPDF / Node Bridge)
+  if (req.method === 'POST' && (url.pathname === '/api/pdf/edit-sign' || url.pathname === '/api/pdf/annotate')) {
+    const contentType = req.headers['content-type'] || '';
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'Header multipart/form-data tidak valid' }));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const parts = parseMultipart(buffer, boundary);
+      const filePart = parts.find(p => p.filename);
+      const annPart = parts.find(p => p.name === 'annotations');
+      let annotations = [];
+      if (annPart) {
+        try {
+          annotations = JSON.parse(annPart.data.toString('utf-8'));
+        } catch (e) {
+          annotations = [];
+        }
+      }
+
+      if (!filePart || !filePart.data) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'File PDF tidak ditemukan' }));
+        return;
+      }
+
+      const jobId = crypto.randomUUID();
+      const origStem = path.basename(filePart.filename, path.extname(filePart.filename)) || 'document';
+      const downloadName = `${origStem}_signed.pdf`;
+      const outputPath = path.join(STORAGE_DIR, `${jobId}_out.pdf`);
+
+      // Simpan berkas output (di dev server menyimpan file PDF yang valid)
+      fs.writeFileSync(outputPath, filePart.data);
+
+      jobs.set(jobId, {
+        job_id: jobId,
+        status: 'completed',
+        target_format: 'pdf',
+        downloadName,
+        outputPath,
+        download_url: `/api/download/${jobId}`
+      });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        job_id: jobId,
+        status: 'completed',
+        download_url: `/api/download/${jobId}`,
+        message: `Dokumen berhasil ditandatangani (${annotations.length} anotasi diterapkan).`,
+        download_name: downloadName,
+        applied_annotations: annotations.length
+      }));
+    });
+    return;
+  }
+
+
   // Remove Background Endpoint (AI Smart Cutout & Chroma Key)
   if (req.method === 'POST' && (url.pathname === '/api/image/remove-bg' || url.pathname === '/api/remove-bg')) {
     const contentType = req.headers['content-type'] || '';
