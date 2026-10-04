@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, Image as ImageIcon, Layers, Minimize2, Wand2, Zap } from 'lucide-react';
+import { FileText, Image as ImageIcon, Layers, Wand2, Zap } from 'lucide-react';
 import { ActiveTab } from '../types';
 
 interface NavbarProps {
@@ -8,6 +8,13 @@ interface NavbarProps {
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ activeTab, onTabChange }) => {
+  const isItemActive = (itemId: ActiveTab) => {
+    if (itemId === 'pdf-tools') {
+      return activeTab === 'pdf-tools' || activeTab === 'merge' || activeTab === 'compress';
+    }
+    return activeTab === itemId;
+  };
+
   const navItems: { id: ActiveTab; label: string; icon: React.ReactNode; color: string }[] = [
     {
       id: 'document',
@@ -28,15 +35,9 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onTabChange }) => {
       color: 'bg-neo-pink'
     },
     {
-      id: 'merge',
-      label: 'Merge PDF',
+      id: 'pdf-tools',
+      label: 'Alat PDF (8-in-1)',
       icon: <Layers className="w-4 h-4 stroke-[2.5]" />,
-      color: 'bg-neo-blue'
-    },
-    {
-      id: 'compress',
-      label: 'Compress',
-      icon: <Minimize2 className="w-4 h-4 stroke-[2.5]" />,
       color: 'bg-neo-yellow'
     }
   ];
@@ -65,7 +66,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onTabChange }) => {
           {/* Desktop Nav Items */}
           <nav className="hidden md:flex items-center gap-2 p-1.5 bg-slate-50 border-2 border-black rounded-2xl shadow-neo-sm">
             {navItems.map((item) => {
-              const isActive = activeTab === item.id;
+              const isActive = isItemActive(item.id);
               return (
                 <button
                   key={item.id}
@@ -96,7 +97,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onTabChange }) => {
         {/* Mobile Sub-Navigation Bar (Horizontal Scrolling) */}
         <div className="md:hidden pb-3 pt-1 overflow-x-auto no-scrollbar flex items-center gap-2">
           {navItems.map((item) => {
-            const isActive = activeTab === item.id;
+            const isActive = isItemActive(item.id);
             return (
               <button
                 key={item.id}

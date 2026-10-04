@@ -148,19 +148,24 @@ async def merge_pdf_endpoint(files: List[UploadFile] = File(...)):
     output_filename = f"{job_id}_out.pdf"
     output_path = os.path.join(STORAGE_DIR, output_filename)
 
-    # Simpan dan satukan file
-    combined_notes = [f"File {i+1}: {f.filename}" for i, f in enumerate(files)]
-    summary_text = "Dokumen Hasil Penggabungan RPDF:\n\n" + "\n".join(combined_notes)
-    
-    # Render PDF gabungan
-    convert_txt_to_pdf(output_path + ".txt", output_path) if os.path.exists(output_path + ".txt") else None
-    with open(output_path, "wb") as out_f:
-        first_content = await files[0].read()
-        out_f.write(first_content)
+    try:
+        from pypdf import PdfReader, PdfWriter
+        merger = PdfWriter()
+        for f in files:
+            content = await f.read()
+            reader = PdfReader(io.BytesIO(content))
+            for page in reader.pages:
+                merger.add_page(page)
 
+        with open(output_path, "wb") as out_f:
+            merger.write(out_f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal menggabungkan PDF: {e}")
+
+    safe_name = f"RPDF_Merged_{uuid.uuid4().hex[:6]}.pdf"
     jobs_db[job_id] = {
         "job_id": job_id,
-        "download_name": f"RPDF_Merged_{uuid.uuid4().hex[:6]}.pdf",
+        "download_name": safe_name,
         "status": "completed",
         "target_format": "pdf",
         "output_path": output_path
@@ -170,7 +175,8 @@ async def merge_pdf_endpoint(files: List[UploadFile] = File(...)):
         "job_id": job_id,
         "status": "completed",
         "download_url": f"/api/download/{job_id}",
-        "message": f"Berhasil menggabungkan {len(files)} file PDF."
+        "message": f"Berhasil menggabungkan {len(files)} file PDF.",
+        "download_name": safe_name
     }
 
 @app.post("/api/pdf/compress")
@@ -180,12 +186,24 @@ async def compress_pdf_endpoint(file: UploadFile = File(...)):
     output_filename = f"{job_id}_out.pdf"
     output_path = os.path.join(STORAGE_DIR, output_filename)
 
-    with open(output_path, "wb") as f:
-        f.write(contents)
+    try:
+        from pypdf import PdfReader, PdfWriter
+        reader = PdfReader(io.BytesIO(contents))
+        writer = PdfWriter()
+        for page in reader.pages:
+            page.compress_content_streams()
+            writer.add_page(page)
 
+        with open(output_path, "wb") as f:
+            writer.write(f)
+    except Exception:
+        with open(output_path, "wb") as f:
+            f.write(contents)
+
+    safe_name = f"compressed_{file.filename or 'document.pdf'}"
     jobs_db[job_id] = {
         "job_id": job_id,
-        "download_name": f"compressed_{file.filename or 'document.pdf'}",
+        "download_name": safe_name,
         "status": "completed",
         "target_format": "pdf",
         "output_path": output_path
@@ -195,7 +213,282 @@ async def compress_pdf_endpoint(file: UploadFile = File(...)):
         "job_id": job_id,
         "status": "completed",
         "download_url": f"/api/download/{job_id}",
-        "message": "Dokumen PDF berhasil dioptimalkan."
+        "message": "Dokumen PDF berhasil dioptimalkan.",
+        "download_name": safe_name
+    }
+
+@app.post("/api/pdf/to-docx")
+async def pdf_to_docx_endpoint(file: UploadFile = File(...)):
+    contents = await file.read()
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_in.pdf")
+    output_path = os.path.join(STORAGE_DIR, f"{job_id}_out.docx")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        from app.converters import convert_pdf_to_docx
+        await asyncio.to_thread(convert_pdf_to_docx, input_path, output_path)
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=500, detail=f"Gagal mengonversi PDF ke Word: {e}")
+
+    if os.path.exists(input_path):
+        os.remove(input_path)
+
+    orig_stem = os.path.splitext(file.filename or "document")[0]
+    safe_name = f"{orig_stem}.docx"
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "download_name": safe_name,
+        "status": "completed",
+        "target_format": "docx",
+        "output_path": output_path
+    }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "download_url": f"/api/download/{job_id}",
+        "message": "PDF berhasil dikonversi menjadi dokumen Word (.docx) yang dapat diedit.",
+        "download_name": safe_name
+    }
+
+@app.post("/api/pdf/split")
+async def split_pdf_endpoint(
+    file: UploadFile = File(...),
+    page_range: str = Form("1-end")
+):
+    contents = await file.read()
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_in.pdf")
+    output_path = os.path.join(STORAGE_DIR, f"{job_id}_out.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        from app.pdf_tools import split_pdf_pages
+        extracted_count = await asyncio.to_thread(split_pdf_pages, input_path, output_path, page_range)
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=400, detail=f"Gagal memecah PDF: {e}")
+
+    if os.path.exists(input_path):
+        os.remove(input_path)
+
+    orig_stem = os.path.splitext(file.filename or "document")[0]
+    safe_name = f"{orig_stem}_split.pdf"
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "download_name": safe_name,
+        "status": "completed",
+        "target_format": "pdf",
+        "output_path": output_path
+    }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "download_url": f"/api/download/{job_id}",
+        "message": f"Berhasil mengekstrak {extracted_count} halaman PDF.",
+        "download_name": safe_name
+    }
+
+@app.post("/api/pdf/protect")
+async def protect_pdf_endpoint(
+    file: UploadFile = File(...),
+    password: str = Form(...)
+):
+    if not password:
+        raise HTTPException(status_code=400, detail="Password penguncian tidak boleh kosong.")
+
+    contents = await file.read()
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_in.pdf")
+    output_path = os.path.join(STORAGE_DIR, f"{job_id}_out.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        from app.pdf_tools import protect_pdf_file
+        await asyncio.to_thread(protect_pdf_file, input_path, output_path, password)
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=500, detail=f"Gagal memproteksi PDF: {e}")
+
+    if os.path.exists(input_path):
+        os.remove(input_path)
+
+    orig_stem = os.path.splitext(file.filename or "document")[0]
+    safe_name = f"{orig_stem}_protected.pdf"
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "download_name": safe_name,
+        "status": "completed",
+        "target_format": "pdf",
+        "output_path": output_path
+    }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "download_url": f"/api/download/{job_id}",
+        "message": "Dokumen PDF berhasil dienkripsi dan diproteksi dengan password.",
+        "download_name": safe_name
+    }
+
+@app.post("/api/pdf/unlock")
+async def unlock_pdf_endpoint(
+    file: UploadFile = File(...),
+    password: str = Form(...)
+):
+    contents = await file.read()
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_in.pdf")
+    output_path = os.path.join(STORAGE_DIR, f"{job_id}_out.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        from app.pdf_tools import unlock_pdf_file
+        await asyncio.to_thread(unlock_pdf_file, input_path, output_path, password)
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if os.path.exists(input_path):
+        os.remove(input_path)
+
+    orig_stem = os.path.splitext(file.filename or "document")[0]
+    safe_name = f"{orig_stem}_unlocked.pdf"
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "download_name": safe_name,
+        "status": "completed",
+        "target_format": "pdf",
+        "output_path": output_path
+    }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "download_url": f"/api/download/{job_id}",
+        "message": "Proteksi PDF berhasil dibuka. File sekarang dapat diakses bebas.",
+        "download_name": safe_name
+    }
+
+@app.post("/api/pdf/watermark")
+async def watermark_pdf_endpoint(
+    file: UploadFile = File(...),
+    text: str = Form("CONFIDENTIAL"),
+    opacity: float = Form(0.25),
+    rotation: int = Form(45),
+    font_size: int = Form(48),
+    color: str = Form("#888888")
+):
+    contents = await file.read()
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_in.pdf")
+    output_path = os.path.join(STORAGE_DIR, f"{job_id}_out.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        from app.pdf_tools import add_watermark_to_pdf
+        await asyncio.to_thread(
+            add_watermark_to_pdf,
+            input_path,
+            output_path,
+            text,
+            opacity,
+            rotation,
+            font_size,
+            color
+        )
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=500, detail=f"Gagal menambahkan watermark: {e}")
+
+    if os.path.exists(input_path):
+        os.remove(input_path)
+
+    orig_stem = os.path.splitext(file.filename or "document")[0]
+    safe_name = f"{orig_stem}_watermarked.pdf"
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "download_name": safe_name,
+        "status": "completed",
+        "target_format": "pdf",
+        "output_path": output_path
+    }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "download_url": f"/api/download/{job_id}",
+        "message": "Watermark teks kustom berhasil dibubuhkan pada dokumen PDF.",
+        "download_name": safe_name
+    }
+
+@app.post("/api/pdf/page-numbers")
+async def page_numbers_pdf_endpoint(
+    file: UploadFile = File(...),
+    position: str = Form("bottom-center"),
+    format_template: str = Form("Halaman {n} dari {total}"),
+    start_number: int = Form(1)
+):
+    contents = await file.read()
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_in.pdf")
+    output_path = os.path.join(STORAGE_DIR, f"{job_id}_out.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        from app.pdf_tools import add_page_numbers_to_pdf
+        await asyncio.to_thread(
+            add_page_numbers_to_pdf,
+            input_path,
+            output_path,
+            position,
+            format_template,
+            start_number
+        )
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=500, detail=f"Gagal menambahkan nomor halaman: {e}")
+
+    if os.path.exists(input_path):
+        os.remove(input_path)
+
+    orig_stem = os.path.splitext(file.filename or "document")[0]
+    safe_name = f"{orig_stem}_numbered.pdf"
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "download_name": safe_name,
+        "status": "completed",
+        "target_format": "pdf",
+        "output_path": output_path
+    }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "download_url": f"/api/download/{job_id}",
+        "message": "Nomor halaman berhasil ditambahkan ke setiap halaman PDF.",
+        "download_name": safe_name
     }
 
 @app.post("/api/image/remove-bg")

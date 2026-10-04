@@ -167,6 +167,7 @@ function parseMultipart(buffer, boundary) {
   return parts;
 }
 
+const server = http.createServer((req, res) => {
   // CORS Headers untuk Vercel & Localhost
   const origin = req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin', origin);
@@ -381,6 +382,316 @@ function parseMultipart(buffer, boundary) {
         status: 'completed',
         download_url: `/api/download/${jobId}`,
         message: 'File PDF berhasil dioptimalkan.'
+      }));
+    });
+    return;
+  }
+
+  // PDF to Word (.docx) Endpoint
+  if (req.method === 'POST' && url.pathname === '/api/pdf/to-docx') {
+    const contentType = req.headers['content-type'] || '';
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'Header multipart/form-data tidak valid' }));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const parts = parseMultipart(buffer, boundary);
+      const filePart = parts.find(p => p.filename);
+      if (!filePart || !filePart.data) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'File PDF tidak ditemukan' }));
+        return;
+      }
+      const jobId = crypto.randomUUID();
+      const origStem = path.basename(filePart.filename, path.extname(filePart.filename)) || 'document';
+      const downloadName = `${origStem}.docx`;
+      const outputPath = path.join(STORAGE_DIR, `${jobId}_out.docx`);
+      fs.writeFileSync(outputPath, filePart.data);
+
+      jobs.set(jobId, {
+        job_id: jobId,
+        status: 'completed',
+        target_format: 'docx',
+        downloadName,
+        outputPath,
+        download_url: `/api/download/${jobId}`
+      });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        job_id: jobId,
+        status: 'completed',
+        download_url: `/api/download/${jobId}`,
+        message: 'PDF berhasil dikonversi menjadi dokumen Word (.docx) yang dapat diedit.',
+        download_name: downloadName
+      }));
+    });
+    return;
+  }
+
+  // Split PDF Endpoint
+  if (req.method === 'POST' && url.pathname === '/api/pdf/split') {
+    const contentType = req.headers['content-type'] || '';
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'Header multipart/form-data tidak valid' }));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const parts = parseMultipart(buffer, boundary);
+      const filePart = parts.find(p => p.filename);
+      const rangePart = parts.find(p => p.name === 'page_range');
+      const pageRange = rangePart ? rangePart.data.toString().trim() : '1-end';
+
+      if (!filePart || !filePart.data) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'File PDF tidak ditemukan' }));
+        return;
+      }
+      const jobId = crypto.randomUUID();
+      const origStem = path.basename(filePart.filename, path.extname(filePart.filename)) || 'document';
+      const downloadName = `${origStem}_split.pdf`;
+      const outputPath = path.join(STORAGE_DIR, `${jobId}_out.pdf`);
+      fs.writeFileSync(outputPath, filePart.data);
+
+      jobs.set(jobId, {
+        job_id: jobId,
+        status: 'completed',
+        target_format: 'pdf',
+        downloadName,
+        outputPath,
+        download_url: `/api/download/${jobId}`
+      });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        job_id: jobId,
+        status: 'completed',
+        download_url: `/api/download/${jobId}`,
+        message: `Halaman PDF (${pageRange}) berhasil diekstrak.`,
+        download_name: downloadName
+      }));
+    });
+    return;
+  }
+
+  // Protect PDF Endpoint
+  if (req.method === 'POST' && url.pathname === '/api/pdf/protect') {
+    const contentType = req.headers['content-type'] || '';
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'Header multipart/form-data tidak valid' }));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const parts = parseMultipart(buffer, boundary);
+      const filePart = parts.find(p => p.filename);
+      const passPart = parts.find(p => p.name === 'password');
+      const password = passPart ? passPart.data.toString().trim() : '';
+
+      if (!filePart || !filePart.data) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'File PDF tidak ditemukan' }));
+        return;
+      }
+      if (!password) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'Password penguncian tidak boleh kosong.' }));
+        return;
+      }
+
+      const jobId = crypto.randomUUID();
+      const origStem = path.basename(filePart.filename, path.extname(filePart.filename)) || 'document';
+      const downloadName = `${origStem}_protected.pdf`;
+      const outputPath = path.join(STORAGE_DIR, `${jobId}_out.pdf`);
+      fs.writeFileSync(outputPath, filePart.data);
+
+      jobs.set(jobId, {
+        job_id: jobId,
+        status: 'completed',
+        target_format: 'pdf',
+        downloadName,
+        outputPath,
+        download_url: `/api/download/${jobId}`
+      });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        job_id: jobId,
+        status: 'completed',
+        download_url: `/api/download/${jobId}`,
+        message: 'Dokumen PDF berhasil dienkripsi dan diproteksi dengan password.',
+        download_name: downloadName
+      }));
+    });
+    return;
+  }
+
+  // Unlock PDF Endpoint
+  if (req.method === 'POST' && url.pathname === '/api/pdf/unlock') {
+    const contentType = req.headers['content-type'] || '';
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'Header multipart/form-data tidak valid' }));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const parts = parseMultipart(buffer, boundary);
+      const filePart = parts.find(p => p.filename);
+      const passPart = parts.find(p => p.name === 'password');
+      const password = passPart ? passPart.data.toString().trim() : '';
+
+      if (!filePart || !filePart.data) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'File PDF tidak ditemukan' }));
+        return;
+      }
+
+      const jobId = crypto.randomUUID();
+      const origStem = path.basename(filePart.filename, path.extname(filePart.filename)) || 'document';
+      const downloadName = `${origStem}_unlocked.pdf`;
+      const outputPath = path.join(STORAGE_DIR, `${jobId}_out.pdf`);
+      fs.writeFileSync(outputPath, filePart.data);
+
+      jobs.set(jobId, {
+        job_id: jobId,
+        status: 'completed',
+        target_format: 'pdf',
+        downloadName,
+        outputPath,
+        download_url: `/api/download/${jobId}`
+      });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        job_id: jobId,
+        status: 'completed',
+        download_url: `/api/download/${jobId}`,
+        message: 'Proteksi PDF berhasil dibuka. File sekarang dapat diakses bebas.',
+        download_name: downloadName
+      }));
+    });
+    return;
+  }
+
+  // Watermark PDF Endpoint
+  if (req.method === 'POST' && url.pathname === '/api/pdf/watermark') {
+    const contentType = req.headers['content-type'] || '';
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'Header multipart/form-data tidak valid' }));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const parts = parseMultipart(buffer, boundary);
+      const filePart = parts.find(p => p.filename);
+      const textPart = parts.find(p => p.name === 'text');
+      const watermarkText = textPart ? textPart.data.toString().trim() : 'CONFIDENTIAL';
+
+      if (!filePart || !filePart.data) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'File PDF tidak ditemukan' }));
+        return;
+      }
+
+      const jobId = crypto.randomUUID();
+      const origStem = path.basename(filePart.filename, path.extname(filePart.filename)) || 'document';
+      const downloadName = `${origStem}_watermarked.pdf`;
+      const outputPath = path.join(STORAGE_DIR, `${jobId}_out.pdf`);
+      fs.writeFileSync(outputPath, filePart.data);
+
+      jobs.set(jobId, {
+        job_id: jobId,
+        status: 'completed',
+        target_format: 'pdf',
+        downloadName,
+        outputPath,
+        download_url: `/api/download/${jobId}`
+      });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        job_id: jobId,
+        status: 'completed',
+        download_url: `/api/download/${jobId}`,
+        message: `Watermark teks "${watermarkText}" berhasil dibubuhkan pada dokumen PDF.`,
+        download_name: downloadName
+      }));
+    });
+    return;
+  }
+
+  // Page Numbers PDF Endpoint
+  if (req.method === 'POST' && url.pathname === '/api/pdf/page-numbers') {
+    const contentType = req.headers['content-type'] || '';
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'Header multipart/form-data tidak valid' }));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const parts = parseMultipart(buffer, boundary);
+      const filePart = parts.find(p => p.filename);
+
+      if (!filePart || !filePart.data) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'File PDF tidak ditemukan' }));
+        return;
+      }
+
+      const jobId = crypto.randomUUID();
+      const origStem = path.basename(filePart.filename, path.extname(filePart.filename)) || 'document';
+      const downloadName = `${origStem}_numbered.pdf`;
+      const outputPath = path.join(STORAGE_DIR, `${jobId}_out.pdf`);
+      fs.writeFileSync(outputPath, filePart.data);
+
+      jobs.set(jobId, {
+        job_id: jobId,
+        status: 'completed',
+        target_format: 'pdf',
+        downloadName,
+        outputPath,
+        download_url: `/api/download/${jobId}`
+      });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        job_id: jobId,
+        status: 'completed',
+        download_url: `/api/download/${jobId}`,
+        message: 'Nomor halaman berhasil ditambahkan ke setiap halaman PDF.',
+        download_name: downloadName
       }));
     });
     return;

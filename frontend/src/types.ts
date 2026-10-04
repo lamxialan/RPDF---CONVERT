@@ -1,4 +1,14 @@
-export type ActiveTab = 'document' | 'image' | 'merge' | 'compress' | 'remove-bg';
+export type ActiveTab = 'document' | 'image' | 'remove-bg' | 'pdf-tools' | 'merge' | 'compress';
+
+export type PdfToolMode =
+  | 'to-docx'
+  | 'split'
+  | 'merge'
+  | 'compress'
+  | 'protect'
+  | 'unlock'
+  | 'watermark'
+  | 'page-numbers';
 
 export type ConversionStatus = 'idle' | 'uploading' | 'processing' | 'completed' | 'failed';
 

@@ -33,6 +33,13 @@ export const App: React.FC = () => {
           color: 'bg-neo-pink',
           icon: <Wand2 className="w-4 h-4 stroke-[2.5]" />
         };
+      case 'pdf-tools':
+        return {
+          title: 'SUITE ALAT PDF PRO',
+          desc: '8 Modul Lengkap PDF: Word (.docx), Split, Merge, Kompres, Protect, Unlock, Watermark, & Nomor Halaman.',
+          color: 'bg-neo-yellow',
+          icon: <Layers className="w-4 h-4 stroke-[2.5]" />
+        };
       case 'merge':
         return {
           title: 'GABUNGKAN PDF (MERGE)',
@@ -46,6 +53,13 @@ export const App: React.FC = () => {
           desc: 'Kecilkan ukuran file PDF tanpa mengurangi ketajaman teks dan gambar.',
           color: 'bg-neo-yellow',
           icon: <Minimize2 className="w-4 h-4 stroke-[2.5]" />
+        };
+      default:
+        return {
+          title: 'RPDF PRO CONVERTER',
+          desc: 'Platform konversi dokumen, gambar, dan utilitas PDF tercepat & terlengkap.',
+          color: 'bg-neo-yellow',
+          icon: <Layers className="w-4 h-4 stroke-[2.5]" />
         };
     }
   };
@@ -137,12 +151,16 @@ export const App: React.FC = () => {
           <RemoveBgConverter />
         )}
 
-        {activeTab === 'merge' && (
-          <PdfUtility mode="merge" />
-        )}
-
-        {activeTab === 'compress' && (
-          <PdfUtility mode="compress" />
+        {(activeTab === 'pdf-tools' || activeTab === 'merge' || activeTab === 'compress') && (
+          <PdfUtility
+            initialMode={
+              activeTab === 'compress'
+                ? 'compress'
+                : activeTab === 'merge'
+                ? 'merge'
+                : 'to-docx'
+            }
+          />
         )}
 
         {/* 3 Bottom Feature Cards: Folder Tab Design with Rounded Corners */}

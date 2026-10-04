@@ -10,3 +10,4 @@ puremagic==1.21
 aiofiles==23.2.1
 rembg==2.0.56
 onnxruntime==1.17.3
+pypdf==4.2.0
