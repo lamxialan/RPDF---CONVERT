@@ -17,7 +17,7 @@ export type PdfToolMode =
 export interface PdfAnnotation {
   id: string;
   page: number; // 1-indexed
-  type: 'text' | 'signature' | 'image' | 'whiteout' | 'highlight' | 'rect' | 'circle' | 'line' | 'link' | 'form';
+  type: 'text' | 'signature' | 'image' | 'whiteout' | 'highlight' | 'rect' | 'circle' | 'line' | 'arrow' | 'strikeout' | 'underline' | 'link' | 'form' | 'stamp' | 'freehand';
   x: number;
   y: number;
   width: number;
@@ -27,11 +27,17 @@ export interface PdfAnnotation {
   text?: string;
   fontSize?: number;
   color?: string;
+  backgroundColor?: string;
   isBold?: boolean;
   isItalic?: boolean;
+  isUnderline?: boolean;
+  isStrikeout?: boolean;
   imageData?: string;
   url?: string;
   checked?: boolean;
+  formType?: 'text' | 'multiline' | 'dropdown' | 'radio' | 'checkbox' | 'signature';
+  stampText?: string;
+  points?: Array<{ x: number; y: number }>;
 }
 
 export interface RecentActivityItem {

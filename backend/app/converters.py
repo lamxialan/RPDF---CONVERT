@@ -335,12 +335,16 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload
     page_rotations = {}
     insert_pages = []
     annotations = []
+    pages_structure = []
+    replacements = []
 
-    if isinstance(annotations_payload, dict) and ("annotations" in annotations_payload or "deleted_pages" in annotations_payload):
+    if isinstance(annotations_payload, dict) and ("annotations" in annotations_payload or "deleted_pages" in annotations_payload or "pages_structure" in annotations_payload):
         annotations = annotations_payload.get("annotations", [])
         deleted_pages = annotations_payload.get("deleted_pages", [])
         page_rotations = annotations_payload.get("page_rotations", {})
         insert_pages = annotations_payload.get("insert_pages", [])
+        pages_structure = annotations_payload.get("pages_structure", [])
+        replacements = annotations_payload.get("replacements", [])
     elif isinstance(annotations_payload, list):
         annotations = annotations_payload
     elif isinstance(annotations_payload, dict):
@@ -355,23 +359,71 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload
                                 item["page"] = 1
                         annotations.append(item)
 
-    # 1. Rotasi halaman jika diminta
-    for p_str, rot in page_rotations.items():
-        try:
-            p_idx = int(p_str) - 1
-            if 0 <= p_idx < len(doc):
-                doc[p_idx].set_rotation((doc[p_idx].rotation + int(rot)) % 360)
-        except Exception:
-            pass
+    # 1. Jika ada pages_structure, bangun ulang dokumen sesuai urutan baru
+    if pages_structure and isinstance(pages_structure, list):
+        new_doc = fitz.open()
+        for p_info in pages_structure:
+            if not isinstance(p_info, dict):
+                continue
+            is_new = bool(p_info.get("isNew") or p_info.get("is_new"))
+            pw = float(p_info.get("width") or 595.0)
+            ph = float(p_info.get("height") or 842.0)
+            if is_new:
+                new_doc.new_page(-1, width=pw, height=ph)
+            else:
+                orig_idx = int(p_info.get("originalPageIndex", p_info.get("original_index", 0)))
+                if 0 <= orig_idx < len(doc):
+                    new_doc.insert_pdf(doc, from_page=orig_idx, to_page=orig_idx)
+                    rot = int(p_info.get("rotation", 0)) % 360
+                    if rot != 0:
+                        new_doc[-1].set_rotation((new_doc[-1].rotation + rot) % 360)
+        if len(new_doc) > 0:
+            doc.close()
+            doc = new_doc
+    else:
+        # 1b. Rotasi halaman jika diminta secara manual
+        for p_str, rot in page_rotations.items():
+            try:
+                p_idx = int(p_str) - 1
+                if 0 <= p_idx < len(doc):
+                    doc[p_idx].set_rotation((doc[p_idx].rotation + int(rot)) % 360)
+            except Exception:
+                pass
 
-    # 2. Sisipkan halaman kosong baru jika diminta
-    for ins in sorted(insert_pages, reverse=True):
-        try:
-            ins_idx = int(ins)
-            if 0 <= ins_idx <= len(doc):
-                doc.new_page(ins_idx)
-        except Exception:
-            pass
+        # 2b. Sisipkan halaman kosong baru jika diminta via insert_pages
+        for ins in sorted(insert_pages, reverse=True):
+            try:
+                ins_idx = int(ins)
+                if 0 <= ins_idx <= len(doc):
+                    doc.new_page(ins_idx, width=595, height=842)
+            except Exception:
+                pass
+
+    # 2. Terapkan Find & Replace jika disertakan
+    if replacements and isinstance(replacements, list):
+        for rep in replacements:
+            if not isinstance(rep, dict):
+                continue
+            sq = rep.get("search") or rep.get("search_query")
+            rq = rep.get("replace") or rep.get("replace_query") or ""
+            target_p = rep.get("page")
+            if not sq:
+                continue
+            for idx, p in enumerate(doc):
+                if target_p is not None and (idx + 1) != int(target_p):
+                    continue
+                matches = p.search_for(str(sq).strip())
+                if matches:
+                    for rect in matches:
+                        p.add_redact_annot(rect, fill=(1, 1, 1))
+                    p.apply_redactions()
+                    for rect in matches:
+                        font_size = max(8.0, min(rect.height * 0.85, 36.0))
+                        insert_pt = fitz.Point(rect.x0, rect.y1 - 2)
+                        try:
+                            p.insert_text(insert_pt, str(rq), fontsize=font_size, color=(0, 0, 0), fontname="helv")
+                        except Exception:
+                            p.insert_text(insert_pt, str(rq), fontsize=font_size, color=(0, 0, 0))
 
     # 3. Menerapkan Anotasi
     total_pages = len(doc)
@@ -487,6 +539,37 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload
                 pass
             applied_count += 1
 
+        elif ann_type == "strikeout":
+            page.draw_line(fitz.Point(x, y + h / 2), fitz.Point(x + w, y + h / 2), color=color, width=2)
+            applied_count += 1
+
+        elif ann_type == "underline":
+            page.draw_line(fitz.Point(x, y + h - 1), fitz.Point(x + w, y + h - 1), color=color, width=2)
+            applied_count += 1
+
+        elif ann_type == "arrow":
+            p1 = fitz.Point(x, y)
+            p2 = fitz.Point(x + w, y + h)
+            page.draw_line(p1, p2, color=color, width=2)
+            # Arrow head
+            applied_count += 1
+
+        elif ann_type == "stamp":
+            stamp_text = str(ann.get("stampText") or ann.get("text") or "APPROVED").upper()
+            rect = fitz.Rect(x, y, x + w, y + h)
+            page.draw_rect(rect, color=color, width=3)
+            page.insert_textbox(rect, stamp_text, fontsize=16, color=color, fontname="hebo", align=fitz.TEXT_ALIGN_CENTER)
+            applied_count += 1
+
+        elif ann_type == "freehand":
+            pts = ann.get("points", [])
+            if pts and len(pts) > 1:
+                for i in range(len(pts) - 1):
+                    pt1 = fitz.Point(float(pts[i].get("x", 0)) * scale_x, float(pts[i].get("y", 0)) * scale_y)
+                    pt2 = fitz.Point(float(pts[i + 1].get("x", 0)) * scale_x, float(pts[i + 1].get("y", 0)) * scale_y)
+                    page.draw_line(pt1, pt2, color=color, width=2)
+                applied_count += 1
+
         elif ann_type in ["signature", "image", "stamp"]:
             image_data = ann.get("imageData") or ann.get("image_data") or ann.get("data") or ""
             if not image_data:
@@ -518,4 +601,81 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload
     doc.save(output_path, deflate=True, garbage=4, clean=True)
     doc.close()
     return applied_count
+
+def search_pdf_text(input_path: str, query: str) -> list:
+    """
+    Mencari kemunculan teks di seluruh halaman dokumen PDF menggunakan PyMuPDF (fitz).
+    Mengembalikan daftar koordinat kotak pembatas (bounding box) kata yang cocok.
+    """
+    import fitz
+
+    if not query or not query.strip():
+        return []
+
+    doc = fitz.open(input_path)
+    results = []
+
+    for page_idx in range(len(doc)):
+        page = doc[page_idx]
+        matches = page.search_for(query.strip())
+        for m in matches:
+            results.append({
+                "page": page_idx + 1,
+                "x": round(m.x0, 2),
+                "y": round(m.y0, 2),
+                "width": round(m.x1 - m.x0, 2),
+                "height": round(m.y1 - m.y0, 2),
+                "rect": [round(m.x0, 2), round(m.y0, 2), round(m.x1, 2), round(m.y1, 2)],
+                "page_width": round(page.rect.width, 2),
+                "page_height": round(page.rect.height, 2)
+            })
+
+    doc.close()
+    return results
+
+def replace_pdf_text(input_path: str, output_path: str, search_query: str, replace_query: str, target_pages: list = None) -> tuple[int, int]:
+    """
+    Mencari dan mengganti teks di dalam PDF menggunakan PyMuPDF:
+    1. Tutup area koordinat kata lama dengan redaction rectangle warna putih solid
+    2. Tuliskan kata pengganti tepat di koordinat awal dengan ukuran font proporsional
+    """
+    import fitz
+
+    if not search_query or not search_query.strip():
+        raise ValueError("Kata pencarian tidak boleh kosong.")
+
+    doc = fitz.open(input_path)
+    total_replaced = 0
+
+    for page_idx in range(len(doc)):
+        page_num = page_idx + 1
+        if target_pages and page_num not in target_pages:
+            continue
+
+        page = doc[page_idx]
+        matches = page.search_for(search_query.strip())
+        if not matches:
+            continue
+
+        for rect in matches:
+            # 1. Tutup teks lama dengan redaction putih
+            page.add_redact_annot(rect, fill=(1, 1, 1))
+            total_replaced += 1
+
+        page.apply_redactions()
+
+        # 2. Sisipkan teks pengganti
+        for rect in matches:
+            font_size = max(8.0, min(rect.height * 0.85, 36.0))
+            insert_pt = fitz.Point(rect.x0, rect.y1 - 2)
+            try:
+                page.insert_text(insert_pt, replace_query, fontsize=font_size, color=(0, 0, 0), fontname="helv")
+            except Exception:
+                page.insert_text(insert_pt, replace_query, fontsize=font_size, color=(0, 0, 0))
+
+    doc.save(output_path, deflate=True, garbage=4, clean=True)
+    total_pages = len(doc)
+    doc.close()
+    return total_replaced, total_pages
+
 

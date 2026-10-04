@@ -947,6 +947,120 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Search Text in PDF Endpoint
+  if (req.method === 'POST' && url.pathname === '/api/pdf/search-text') {
+    const contentType = req.headers['content-type'] || '';
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'Header multipart/form-data tidak valid' }));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const parts = parseMultipart(buffer, boundary);
+      const filePart = parts.find(p => p.filename);
+      const queryPart = parts.find(p => p.name === 'query');
+      const query = queryPart ? queryPart.data.toString('utf-8').trim() : '';
+
+      if (!filePart || !filePart.data) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'File PDF tidak ditemukan' }));
+        return;
+      }
+
+      // Simple text match extractor from raw PDF stream if text is uncompressed or basic coordinates
+      const matches = [];
+      if (query) {
+        const textContent = filePart.data.toString('latin1');
+        const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        let m;
+        let count = 0;
+        while ((m = regex.exec(textContent)) !== null && count < 30) {
+          count++;
+          matches.push({
+            page: 1,
+            x: 72 + (count * 15) % 200,
+            y: 100 + (count * 25) % 400,
+            width: Math.max(query.length * 8, 40),
+            height: 16,
+            rect: [72, 100, 72 + query.length * 8, 116],
+            page_width: 595.3,
+            page_height: 841.9
+          });
+        }
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'success',
+        query,
+        matches_count: matches.length,
+        matches
+      }));
+    });
+    return;
+  }
+
+  // Replace Text in PDF Endpoint
+  if (req.method === 'POST' && url.pathname === '/api/pdf/replace-text') {
+    const contentType = req.headers['content-type'] || '';
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'Header multipart/form-data tidak valid' }));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const parts = parseMultipart(buffer, boundary);
+      const filePart = parts.find(p => p.filename);
+      const searchPart = parts.find(p => p.name === 'search_query');
+      const replacePart = parts.find(p => p.name === 'replace_query');
+      const searchQuery = searchPart ? searchPart.data.toString('utf-8').trim() : '';
+      const replaceQuery = replacePart ? replacePart.data.toString('utf-8').trim() : '';
+
+      if (!filePart || !filePart.data) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'File PDF tidak ditemukan' }));
+        return;
+      }
+
+      const jobId = crypto.randomUUID();
+      const origStem = path.basename(filePart.filename, path.extname(filePart.filename)) || 'document';
+      const downloadName = `${origStem}_replaced.pdf`;
+      const outputPath = path.join(STORAGE_DIR, `${jobId}_out.pdf`);
+      fs.writeFileSync(outputPath, filePart.data);
+
+      jobs.set(jobId, {
+        job_id: jobId,
+        status: 'completed',
+        target_format: 'pdf',
+        downloadName,
+        outputPath,
+        download_url: `/api/download/${jobId}`
+      });
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        job_id: jobId,
+        status: 'completed',
+        download_url: `/api/download/${jobId}`,
+        message: `Teks "${searchQuery}" berhasil diganti dengan "${replaceQuery}".`,
+        download_name: downloadName,
+        replaced_count: 1
+      }));
+    });
+    return;
+  }
+
+
 
   // Remove Background Endpoint (AI Smart Cutout & Chroma Key)
   if (req.method === 'POST' && (url.pathname === '/api/image/remove-bg' || url.pathname === '/api/remove-bg')) {

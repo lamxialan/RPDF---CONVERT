@@ -726,6 +726,91 @@ async def edit_and_sign_pdf(
         "applied_annotations": applied_count
     }
 
+@app.post("/api/pdf/search-text")
+async def search_pdf_text_endpoint(
+    file: UploadFile = File(...),
+    query: str = Form(...)
+):
+    contents = await file.read()
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_search.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        from app.converters import search_pdf_text
+        matches = await asyncio.to_thread(search_pdf_text, input_path, query)
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=400, detail=f"Gagal mencari teks di dalam PDF: {e}")
+    finally:
+        if os.path.exists(input_path):
+            try:
+                os.remove(input_path)
+            except Exception:
+                pass
+
+    return {
+        "status": "success",
+        "query": query,
+        "matches_count": len(matches),
+        "matches": matches
+    }
+
+@app.post("/api/pdf/replace-text")
+async def replace_pdf_text_endpoint(
+    file: UploadFile = File(...),
+    search_query: str = Form(...),
+    replace_query: str = Form(...),
+    page: Optional[int] = Form(None)
+):
+    contents = await file.read()
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_rep_in.pdf")
+    output_path = os.path.join(STORAGE_DIR, f"{job_id}_rep_out.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    target_pages = [page] if page else None
+
+    try:
+        from app.converters import replace_pdf_text
+        replaced_count, total_pages = await asyncio.to_thread(
+            replace_pdf_text, input_path, output_path, search_query, replace_query, target_pages
+        )
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=400, detail=f"Gagal mengganti teks di dalam PDF: {e}")
+    finally:
+        if os.path.exists(input_path):
+            try:
+                os.remove(input_path)
+            except Exception:
+                pass
+
+    orig_stem = os.path.splitext(file.filename or "document")[0]
+    safe_name = f"{orig_stem}_replaced.pdf"
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "download_name": safe_name,
+        "status": "completed",
+        "target_format": "pdf",
+        "output_path": output_path
+    }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "download_url": f"/api/download/{job_id}",
+        "message": f"Berhasil mengganti {replaced_count} teks di {total_pages} halaman.",
+        "download_name": safe_name,
+        "replaced_count": replaced_count
+    }
+
 @app.post("/api/image/remove-bg")
 @app.post("/api/remove-bg")
 async def remove_bg_endpoint(
