@@ -16,7 +16,18 @@ import {
   Copy,
   Bold,
   Italic,
-  Loader2
+  Loader2,
+  RotateCw,
+  RotateCcw,
+  Plus,
+  Link,
+  CheckSquare,
+  Highlighter,
+  Shapes,
+  Circle,
+  Minus,
+  Undo2,
+  Redo2
 } from 'lucide-react';
 import { PdfAnnotation } from '../types';
 import { SignatureModal } from './SignatureModal';
@@ -33,7 +44,16 @@ interface PdfSignEditorProps {
   onSuccess?: (downloadUrl: string, fileName: string) => void;
 }
 
-type EditorTool = 'select' | 'text' | 'whiteout';
+type EditorTool =
+  | 'select'
+  | 'text'
+  | 'whiteout'
+  | 'highlight'
+  | 'rect'
+  | 'circle'
+  | 'line'
+  | 'link'
+  | 'form';
 
 export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
   file,
@@ -54,14 +74,22 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Active Tool & Properties
-  const [activeTool, setActiveTool] = useState<EditorTool>('select');
-  const [fontSize, setFontSize] = useState<number>(16);
+  const [activeTool, setActiveTool] = useState<EditorTool>('text');
+  const [fontSize, setFontSize] = useState<number>(14);
   const [textColor, setTextColor] = useState<string>('#000000');
   const [isBold, setIsBold] = useState<boolean>(false);
   const [isItalic, setIsItalic] = useState<boolean>(false);
+  const [shapeMenuOpen, setShapeMenuOpen] = useState<boolean>(false);
 
-  // Annotations stored in NATURAL PDF PAGE POINTS (Zoom-independent!)
+  // Per-page modifications state
+  const [deletedPages, setDeletedPages] = useState<number[]>([]);
+  const [pageRotations, setPageRotations] = useState<{ [page: number]: number }>({});
+  const [insertedPages, setInsertedPages] = useState<number[]>([]);
+
+  // Annotations History (Undo / Redo stack)
   const [annotations, setAnnotations] = useState<PdfAnnotation[]>([]);
+  const [history, setHistory] = useState<PdfAnnotation[][]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const [selectedAnnId, setSelectedAnnId] = useState<string | null>(null);
 
   // Signature Modal & Stamp File Picker
@@ -85,17 +113,62 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     initialNatH: number;
   } | null>(null);
 
-  // Keyboard shortcut listener: Delete & Backspace
+  // Record undo/redo history helper
+  const pushHistory = useCallback((newAnnotations: PdfAnnotation[]) => {
+    setHistory(prev => {
+      const upToCurrent = prev.slice(0, historyIndex + 1);
+      return [...upToCurrent, newAnnotations];
+    });
+    setHistoryIndex(prev => prev + 1);
+  }, [historyIndex]);
+
+  const undo = () => {
+    if (historyIndex > 0) {
+      const prevIndex = historyIndex - 1;
+      setHistoryIndex(prevIndex);
+      setAnnotations(history[prevIndex]);
+      setSelectedAnnId(null);
+    }
+  };
+
+  const redo = () => {
+    if (historyIndex < history.length - 1) {
+      const nextIndex = historyIndex + 1;
+      setHistoryIndex(nextIndex);
+      setAnnotations(history[nextIndex]);
+      setSelectedAnnId(null);
+    }
+  };
+
+  // Keyboard shortcut listener: Delete, Backspace, Ctrl+Z, Ctrl+Y
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+Z (Undo) and Ctrl+Y / Ctrl+Shift+Z (Redo)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+        return;
+      }
+
       if (!selectedAnnId) return;
 
       const activeTag = (document.activeElement?.tagName || '').toLowerCase();
       const isInputActive = activeTag === 'input' || activeTag === 'textarea';
 
-      if ((e.key === 'Delete' || (e.key === 'Backspace' && !isInputActive))) {
+      if (e.key === 'Delete' || (e.key === 'Backspace' && !isInputActive)) {
         e.preventDefault();
-        setAnnotations(prev => prev.filter(a => a.id !== selectedAnnId));
+        const updated = annotations.filter(a => a.id !== selectedAnnId);
+        setAnnotations(updated);
+        pushHistory(updated);
         setSelectedAnnId(null);
       } else if (e.key === 'Escape') {
         setSelectedAnnId(null);
@@ -105,7 +178,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedAnnId]);
+  }, [selectedAnnId, annotations, history, historyIndex, pushHistory]);
 
   // Load PDF Document
   useEffect(() => {
@@ -116,7 +189,12 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     setErrorMessage(null);
     setCurrentPage(1);
     setAnnotations([]);
+    setHistory([[]]);
+    setHistoryIndex(0);
     setSelectedAnnId(null);
+    setDeletedPages([]);
+    setPageRotations({});
+    setInsertedPages([]);
 
     const loadPdf = async () => {
       try {
@@ -153,7 +231,10 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
         height: unscaledViewport.height
       });
 
-      const viewport = page.getViewport({ scale });
+      // Include custom page rotation if any
+      const pageRot = (pageRotations[currentPage] || 0) % 360;
+      const viewport = page.getViewport({ scale, rotation: pageRot });
+
       setViewportDimensions({
         width: viewport.width,
         height: viewport.height
@@ -182,13 +263,13 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     } catch (err) {
       console.error('[PDF Render Error]', err);
     }
-  }, [pdfDoc, currentPage, scale]);
+  }, [pdfDoc, currentPage, scale, pageRotations]);
 
   useEffect(() => {
     renderCurrentPage();
   }, [renderCurrentPage]);
 
-  // Click on Canvas overlay to place Text or Whiteout
+  // Click on Canvas overlay to place new annotations
   const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!overlayRef.current) return;
 
@@ -206,39 +287,125 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     const natX = (screenX / viewportDimensions.width) * naturalDimensions.width;
     const natY = (screenY / viewportDimensions.height) * naturalDimensions.height;
 
+    let newAnn: PdfAnnotation | null = null;
+    const id = 'ann_' + Date.now() + Math.random().toString(36).substring(2, 6);
+
     if (activeTool === 'text') {
-      const newAnn: PdfAnnotation = {
-        id: 'ann_' + Date.now() + Math.random().toString(36).substring(2, 6),
+      // Sejda Text Box: clean, minimal, auto-expanding
+      newAnn = {
+        id,
         page: currentPage,
         type: 'text',
-        x: Math.max(10, Math.min(natX - 10, naturalDimensions.width - 160)),
-        y: Math.max(10, Math.min(natY - 10, naturalDimensions.height - 35)),
-        width: 160,
-        height: 32,
+        x: Math.max(5, Math.min(natX, naturalDimensions.width - 120)),
+        y: Math.max(5, Math.min(natY - 8, naturalDimensions.height - 30)),
+        width: 140,
+        height: 28,
         page_width: naturalDimensions.width,
         page_height: naturalDimensions.height,
-        text: 'Ketik teks di sini...',
+        text: '', // Empty text so placeholder "Type your text" appears naturally
         fontSize: fontSize,
         color: textColor,
         isBold: isBold,
         isItalic: isItalic
       };
-      setAnnotations(prev => [...prev, newAnn]);
-      setSelectedAnnId(newAnn.id);
-      setActiveTool('select');
     } else if (activeTool === 'whiteout') {
-      const newAnn: PdfAnnotation = {
-        id: 'ann_' + Date.now() + Math.random().toString(36).substring(2, 6),
+      newAnn = {
+        id,
         page: currentPage,
         type: 'whiteout',
-        x: Math.max(10, Math.min(natX - 60, naturalDimensions.width - 140)),
-        y: Math.max(10, Math.min(natY - 15, naturalDimensions.height - 35)),
-        width: 120,
-        height: 28,
+        x: Math.max(5, Math.min(natX - 50, naturalDimensions.width - 110)),
+        y: Math.max(5, Math.min(natY - 12, naturalDimensions.height - 28)),
+        width: 110,
+        height: 26,
         page_width: naturalDimensions.width,
         page_height: naturalDimensions.height
       };
-      setAnnotations(prev => [...prev, newAnn]);
+    } else if (activeTool === 'highlight') {
+      newAnn = {
+        id,
+        page: currentPage,
+        type: 'highlight',
+        x: Math.max(5, Math.min(natX - 50, naturalDimensions.width - 120)),
+        y: Math.max(5, Math.min(natY - 10, naturalDimensions.height - 24)),
+        width: 120,
+        height: 20,
+        page_width: naturalDimensions.width,
+        page_height: naturalDimensions.height
+      };
+    } else if (activeTool === 'rect') {
+      newAnn = {
+        id,
+        page: currentPage,
+        type: 'rect',
+        x: Math.max(5, natX - 40),
+        y: Math.max(5, natY - 30),
+        width: 80,
+        height: 60,
+        color: textColor,
+        page_width: naturalDimensions.width,
+        page_height: naturalDimensions.height
+      };
+    } else if (activeTool === 'circle') {
+      newAnn = {
+        id,
+        page: currentPage,
+        type: 'circle',
+        x: Math.max(5, natX - 35),
+        y: Math.max(5, natY - 35),
+        width: 70,
+        height: 70,
+        color: textColor,
+        page_width: naturalDimensions.width,
+        page_height: naturalDimensions.height
+      };
+    } else if (activeTool === 'line') {
+      newAnn = {
+        id,
+        page: currentPage,
+        type: 'line',
+        x: Math.max(5, natX - 50),
+        y: Math.max(5, natY),
+        width: 100,
+        height: 2,
+        color: textColor,
+        page_width: naturalDimensions.width,
+        page_height: naturalDimensions.height
+      };
+    } else if (activeTool === 'link') {
+      const url = window.prompt('Masukkan alamat URL tautan (Hyperlink):', 'https://');
+      if (url) {
+        newAnn = {
+          id,
+          page: currentPage,
+          type: 'link',
+          x: Math.max(5, natX - 40),
+          y: Math.max(5, natY - 12),
+          width: 80,
+          height: 24,
+          url: url,
+          page_width: naturalDimensions.width,
+          page_height: naturalDimensions.height
+        };
+      }
+    } else if (activeTool === 'form') {
+      newAnn = {
+        id,
+        page: currentPage,
+        type: 'form',
+        x: Math.max(5, natX - 10),
+        y: Math.max(5, natY - 10),
+        width: 20,
+        height: 20,
+        checked: false,
+        page_width: naturalDimensions.width,
+        page_height: naturalDimensions.height
+      };
+    }
+
+    if (newAnn) {
+      const updated = [...annotations, newAnn];
+      setAnnotations(updated);
+      pushHistory(updated);
       setSelectedAnnId(newAnn.id);
       setActiveTool('select');
     }
@@ -260,7 +427,9 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
       page_height: naturalDimensions.height,
       imageData: dataUrl
     };
-    setAnnotations(prev => [...prev, newAnn]);
+    const updated = [...annotations, newAnn];
+    setAnnotations(updated);
+    pushHistory(updated);
     setSelectedAnnId(newAnn.id);
     setActiveTool('select');
   };
@@ -288,7 +457,9 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
         page_height: naturalDimensions.height,
         imageData: dataUrl
       };
-      setAnnotations(prev => [...prev, newAnn]);
+      const updated = [...annotations, newAnn];
+      setAnnotations(updated);
+      pushHistory(updated);
       setSelectedAnnId(newAnn.id);
       setActiveTool('select');
     };
@@ -308,20 +479,52 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
       x: Math.min(naturalDimensions.width - source.width, source.x + 15),
       y: Math.min(naturalDimensions.height - source.height, source.y + 15)
     };
-    setAnnotations(prev => [...prev, clone]);
+    const updated = [...annotations, clone];
+    setAnnotations(updated);
+    pushHistory(updated);
     setSelectedAnnId(clone.id);
   };
 
   // Delete an annotation
   const handleDelete = (annId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    setAnnotations(prev => prev.filter(a => a.id !== annId));
+    const updated = annotations.filter(a => a.id !== annId);
+    setAnnotations(updated);
+    pushHistory(updated);
     if (selectedAnnId === annId) {
       setSelectedAnnId(null);
     }
   };
 
-  // Drag and Resize Handlers (with Screen -> Natural Points Conversion)
+  // Per-page actions (Rotate, Insert, Delete)
+  const handleRotatePage = (direction: 'cw' | 'ccw') => {
+    const currentRot = pageRotations[currentPage] || 0;
+    const delta = direction === 'cw' ? 90 : -90;
+    const newRot = (currentRot + delta + 360) % 360;
+    setPageRotations(prev => ({ ...prev, [currentPage]: newRot }));
+  };
+
+  const handleDeletePage = () => {
+    if (numPages <= 1) {
+      alert('Dokumen PDF harus memiliki minimal 1 halaman.');
+      return;
+    }
+    if (window.confirm(`Hapus halaman ${currentPage} dari dokumen?`)) {
+      setDeletedPages(prev => [...new Set([...prev, currentPage])]);
+      // Remove annotations on this page
+      const updated = annotations.filter(a => a.page !== currentPage);
+      setAnnotations(updated);
+      pushHistory(updated);
+      setCurrentPage(p => Math.max(1, Math.min(numPages - 1, p)));
+    }
+  };
+
+  const handleInsertPage = () => {
+    setInsertedPages(prev => [...prev, currentPage]);
+    alert(`Halaman kosong baru telah disisipkan setelah halaman ${currentPage}.`);
+  };
+
+  // Drag and Resize Handlers
   const handleMouseDownItem = (e: React.MouseEvent, annId: string, action: 'move' | 'resize', handle?: 'tl' | 'tr' | 'bl' | 'br') => {
     e.stopPropagation();
     const target = annotations.find(a => a.id === annId);
@@ -344,11 +547,9 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!dragState) return;
 
-    // Delta in screen pixels
     const deltaScreenX = e.clientX - dragState.startX;
     const deltaScreenY = e.clientY - dragState.startY;
 
-    // Convert Delta Screen -> Delta Natural Points
     const scaleFactorX = naturalDimensions.width / viewportDimensions.width;
     const scaleFactorY = naturalDimensions.height / viewportDimensions.height;
     const deltaNatX = deltaScreenX * scaleFactorX;
@@ -404,6 +605,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
   const handleMouseUp = () => {
     if (dragState) {
+      pushHistory(annotations);
       setDragState(null);
     }
   };
@@ -427,11 +629,17 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
       await new Promise(r => setTimeout(r, 400));
       setApplyStep('Menerapkan anotasi dengan PyMuPDF...');
 
+      const payload = {
+        annotations: annotations,
+        deleted_pages: deletedPages,
+        page_rotations: pageRotations,
+        insert_pages: insertedPages
+      };
+
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('annotations', JSON.stringify(annotations));
+      formData.append('annotations', JSON.stringify(payload));
 
-      // Try /api/pdf/apply-annotations with fallback to /api/pdf/edit-sign
       let response = await fetch(getApiUrl('/api/pdf/apply-annotations'), {
         method: 'POST',
         body: formData
@@ -460,7 +668,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
       const downloadEndpoint = getApiUrl(data.download_url);
       const safeDownloadName = data.download_name || `${file.name.replace(/\.[^/.]+$/, '')}_signed.pdf`;
 
-      // Simpan riwayat unduhan lokal
       addRecentActivity({
         fileName: safeDownloadName,
         operation: 'Edit & Tanda Tangan PDF',
@@ -468,7 +675,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
         fileSize: file.size
       });
 
-      // Browser automatic download
       const a = document.createElement('a');
       a.href = downloadEndpoint;
       a.download = safeDownloadName;
@@ -488,7 +694,6 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
     }
   };
 
-  const selectedAnn = annotations.find(a => a.id === selectedAnnId);
   const pageAnnotations = annotations.filter(a => a.page === currentPage);
   const totalAnnotationsCount = annotations.length;
 
@@ -516,270 +721,297 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
         onSave={handleSaveSignature}
       />
 
-      {/* TOP MAIN HEADER (Neo-Brutalism) */}
-      <header className="h-16 bg-white dark:bg-[#181818] border-b-[3px] border-black dark:border-white px-4 flex items-center justify-between shadow-neo-sm z-20">
-        
-        {/* Title & Document Badge */}
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-neo-pink border-2 border-black flex items-center justify-center text-black font-black shadow-neo-sm">
-            <PenTool className="w-5 h-5 stroke-[2.5]" />
+      {/* TOP HEADER: Clean Neo-Brutalist Branding & Close */}
+      <header className="h-14 bg-white dark:bg-[#181818] border-b-[3px] border-black dark:border-white px-4 flex items-center justify-between shadow-neo-sm z-30">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-neo-pink border-2 border-black flex items-center justify-center text-black font-black shadow-neo-sm">
+            <PenTool className="w-4 h-4 stroke-[2.5]" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="font-black text-sm sm:text-base uppercase tracking-tight">
-                Editor PDF Sejda-Style
-              </h2>
-              <span className="bg-neo-yellow text-black border border-black text-[10px] font-black px-2 py-0.5 rounded shadow-neo-sm">
-                INTERAKTIF
+            <h2 className="font-black text-sm sm:text-base uppercase tracking-tight flex items-center gap-2">
+              <span>Sejda PDF Editor Pro</span>
+              <span className="bg-neo-yellow text-black border border-black text-[9px] font-black px-1.5 py-0.5 rounded shadow-neo-sm hidden sm:inline-block">
+                v2.0
               </span>
-            </div>
-            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 truncate max-w-xs sm:max-w-md">
+            </h2>
+            <p className="text-[10px] font-bold text-slate-500 truncate max-w-xs sm:max-w-md">
               {file.name} • {totalAnnotationsCount} objek terpasang
             </p>
           </div>
         </div>
 
-        {/* Action Button: Apply & Download */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleApplyAndDownload}
-            disabled={isApplying || isLoadingPdf}
-            className={`px-5 py-2.5 border-[2.5px] border-black dark:border-white rounded-xl text-xs font-black uppercase flex items-center gap-2 shadow-neo transition-all cursor-pointer ${
-              isApplying || isLoadingPdf
-                ? 'bg-slate-200 dark:bg-slate-700 text-slate-400 cursor-not-allowed border-dashed'
-                : 'bg-neo-green text-black hover:bg-emerald-400 active:translate-x-0.5 active:translate-y-0.5'
-            }`}
-          >
-            {isApplying ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin text-black" />
-                <span>{applyStep || 'Memproses PDF...'}</span>
-              </>
-            ) : (
-              <>
-                <Download className="w-4 h-4 stroke-[2.5]" />
-                <span>TERAPKAN & UNDUH PDF</span>
-              </>
-            )}
-          </button>
+        {/* Undo, Redo, and Close button */}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center bg-slate-100 dark:bg-[#252525] border-2 border-black dark:border-white rounded-xl p-0.5 shadow-neo-sm">
+            <button
+              onClick={undo}
+              disabled={historyIndex <= 0}
+              className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 rounded-lg transition cursor-pointer"
+              title="Batalkan (Undo - Ctrl+Z)"
+            >
+              <Undo2 className="w-4 h-4 stroke-[2.5]" />
+            </button>
+            <button
+              onClick={redo}
+              disabled={historyIndex >= history.length - 1}
+              className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 rounded-lg transition cursor-pointer"
+              title="Ulangi (Redo - Ctrl+Y)"
+            >
+              <Redo2 className="w-4 h-4 stroke-[2.5]" />
+            </button>
+          </div>
 
           <button
             onClick={onClose}
-            className="w-9 h-9 rounded-xl border-2 border-black dark:border-white bg-slate-100 dark:bg-[#2A2A2A] hover:bg-neo-pink text-black dark:text-white flex items-center justify-center transition-colors shadow-neo-sm cursor-pointer"
+            className="w-8 h-8 rounded-xl border-2 border-black dark:border-white bg-slate-100 dark:bg-[#2A2A2A] hover:bg-neo-pink flex items-center justify-center transition-colors shadow-neo-sm cursor-pointer"
             title="Tutup Editor"
           >
-            <X className="w-5 h-5 stroke-[2.5]" />
+            <X className="w-4 h-4 stroke-[2.5]" />
           </button>
         </div>
       </header>
 
-      {/* SUB-TOOLBAR: INTERACTIVE TOOLS & CONTROLS */}
-      <div className="bg-[#FAF9F5] dark:bg-[#202020] border-b-2 border-black dark:border-white px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs font-black z-10">
+      {/* SEJDA MAIN TOOLBAR: Full Suite of Tools */}
+      <div className="bg-[#FAF9F5] dark:bg-[#202020] border-b-2 border-black dark:border-white px-4 py-2 flex items-center justify-center gap-1.5 sm:gap-2 flex-wrap text-xs font-black z-20">
         
-        {/* Navigation & Zoom */}
-        <div className="flex items-center gap-2">
-          {/* Page Switcher */}
-          <div className="flex items-center bg-white dark:bg-[#181818] border-2 border-black dark:border-white rounded-xl shadow-neo-sm overflow-hidden">
+        {/* 1. Text */}
+        <button
+          onClick={() => setActiveTool('text')}
+          className={`px-3 py-1.5 rounded-xl border-2 border-black dark:border-white uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeTool === 'text'
+              ? 'bg-neo-yellow text-black shadow-neo-sm scale-105 ring-2 ring-black'
+              : 'bg-white dark:bg-[#181818] hover:bg-neo-yellow/30'
+          }`}
+          title="Tambah Teks (Klik di sembarang area dokumen)"
+        >
+          <Type className="w-3.5 h-3.5 stroke-[2.5]" />
+          <span>Text</span>
+        </button>
+
+        {/* 2. Links */}
+        <button
+          onClick={() => setActiveTool('link')}
+          className={`px-3 py-1.5 rounded-xl border-2 border-black dark:border-white uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeTool === 'link'
+              ? 'bg-neo-blue text-black shadow-neo-sm scale-105 ring-2 ring-black'
+              : 'bg-white dark:bg-[#181818] hover:bg-neo-blue/30'
+          }`}
+          title="Sisipkan Tautan Hyperlink"
+        >
+          <Link className="w-3.5 h-3.5 stroke-[2.5]" />
+          <span>Links</span>
+        </button>
+
+        {/* 3. Forms */}
+        <button
+          onClick={() => setActiveTool('form')}
+          className={`px-3 py-1.5 rounded-xl border-2 border-black dark:border-white uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeTool === 'form'
+              ? 'bg-emerald-300 text-black shadow-neo-sm scale-105 ring-2 ring-black'
+              : 'bg-white dark:bg-[#181818] hover:bg-emerald-100'
+          }`}
+          title="Sisipkan Kotak Form / Checkbox"
+        >
+          <CheckSquare className="w-3.5 h-3.5 stroke-[2.5]" />
+          <span>Forms</span>
+        </button>
+
+        {/* 4. Images */}
+        <button
+          onClick={() => stampInputRef.current?.click()}
+          className="px-3 py-1.5 rounded-xl border-2 border-black dark:border-white bg-white dark:bg-[#181818] hover:bg-slate-100 text-black dark:text-white uppercase flex items-center gap-1.5 shadow-neo-sm cursor-pointer"
+          title="Sisipkan Gambar, Logo, atau Materai"
+        >
+          <ImageIcon className="w-3.5 h-3.5 stroke-[2.5]" />
+          <span>Images</span>
+        </button>
+
+        {/* 5. Sign */}
+        <button
+          onClick={() => setIsSigModalOpen(true)}
+          className="px-3 py-1.5 rounded-xl border-2 border-black dark:border-white bg-neo-pink hover:bg-pink-400 text-black uppercase flex items-center gap-1.5 shadow-neo-sm active:translate-x-0.5 active:translate-y-0.5 cursor-pointer"
+          title="Tanda Tangan Digital (Gambar, Ketik, atau Unggah)"
+        >
+          <PenTool className="w-3.5 h-3.5 stroke-[2.5]" />
+          <span>Sign</span>
+        </button>
+
+        {/* 6. Whiteout */}
+        <button
+          onClick={() => setActiveTool('whiteout')}
+          className={`px-3 py-1.5 rounded-xl border-2 border-black dark:border-white uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeTool === 'whiteout'
+              ? 'bg-white text-black shadow-neo-sm scale-105 ring-2 ring-rose-500'
+              : 'bg-white dark:bg-[#181818] hover:bg-slate-100'
+          }`}
+          title="Tutup Teks Lama (Whiteout Opaque Box)"
+        >
+          <Square className="w-3.5 h-3.5 stroke-[2.5] fill-white" />
+          <span>Whiteout</span>
+        </button>
+
+        {/* 7. Annotate / Highlight */}
+        <button
+          onClick={() => setActiveTool('highlight')}
+          className={`px-3 py-1.5 rounded-xl border-2 border-black dark:border-white uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeTool === 'highlight'
+              ? 'bg-amber-300 text-black shadow-neo-sm scale-105 ring-2 ring-black'
+              : 'bg-white dark:bg-[#181818] hover:bg-amber-100'
+          }`}
+          title="Highlight / Stabilo Teks"
+        >
+          <Highlighter className="w-3.5 h-3.5 stroke-[2.5]" />
+          <span>Annotate</span>
+        </button>
+
+        {/* 8. Shapes Dropdown */}
+        <div className="relative">
+          <button
+            onClick={() => setShapeMenuOpen(!shapeMenuOpen)}
+            className={`px-3 py-1.5 rounded-xl border-2 border-black dark:border-white uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+              ['rect', 'circle', 'line'].includes(activeTool)
+                ? 'bg-purple-300 text-black shadow-neo-sm scale-105 ring-2 ring-black'
+                : 'bg-white dark:bg-[#181818] hover:bg-purple-100'
+            }`}
+            title="Bentuk (Kotak, Lingkaran, Garis)"
+          >
+            <Shapes className="w-3.5 h-3.5 stroke-[2.5]" />
+            <span>Shapes</span>
+          </button>
+
+          {shapeMenuOpen && (
+            <div className="absolute top-full mt-1.5 left-0 bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-xl shadow-neo p-1.5 z-40 flex flex-col gap-1 w-32">
+              <button
+                onClick={() => { setActiveTool('rect'); setShapeMenuOpen(false); }}
+                className="flex items-center gap-2 px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-left"
+              >
+                <Square className="w-3.5 h-3.5" />
+                <span>Kotak</span>
+              </button>
+              <button
+                onClick={() => { setActiveTool('circle'); setShapeMenuOpen(false); }}
+                className="flex items-center gap-2 px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-left"
+              >
+                <Circle className="w-3.5 h-3.5" />
+                <span>Lingkaran</span>
+              </button>
+              <button
+                onClick={() => { setActiveTool('line'); setShapeMenuOpen(false); }}
+                className="flex items-center gap-2 px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-left"
+              >
+                <Minus className="w-3.5 h-3.5" />
+                <span>Garis</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Pointer / Deselect */}
+        <button
+          onClick={() => setActiveTool('select')}
+          className={`px-3 py-1.5 rounded-xl border-2 border-black dark:border-white uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeTool === 'select'
+              ? 'bg-black text-white dark:bg-white dark:text-black shadow-neo-sm'
+              : 'bg-white dark:bg-[#181818] hover:bg-slate-100'
+          }`}
+          title="Mode Kursor / Pilih Objek"
+        >
+          <MousePointer className="w-3.5 h-3.5 stroke-[2.5]" />
+          <span>Pilih</span>
+        </button>
+
+      </div>
+
+      {/* MAIN DOCUMENT VIEWPORT WITH SEJDA PER-PAGE CONTROLS */}
+      <div className="flex-1 overflow-auto bg-slate-200 dark:bg-[#121212] p-4 sm:p-8 flex flex-col items-center relative">
+        
+        {/* PER-PAGE BAR DIRECTLY ATOP THE CURRENT PDF PAGE */}
+        <div className="mb-3 flex items-center justify-between gap-3 bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-2xl px-4 py-2 shadow-neo-sm text-xs font-black w-full max-w-2xl z-10">
+          
+          {/* Page Indicator & Navigation */}
+          <div className="flex items-center gap-2">
+            <span className="bg-neo-yellow text-black border border-black px-2.5 py-0.5 rounded-md shadow-neo-sm font-black">
+              Hal {currentPage} / {numPages}
+            </span>
+
             <button
               onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
               disabled={currentPage <= 1 || isLoadingPdf}
-              className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 transition-colors cursor-pointer"
+              className="p-1 border border-black dark:border-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 cursor-pointer"
               title="Halaman Sebelumnya"
             >
-              <ChevronLeft className="w-4 h-4 stroke-[3]" />
+              <ChevronLeft className="w-3.5 h-3.5 stroke-[3]" />
             </button>
-            <span className="px-3 text-xs tracking-wider font-black">
-              Hal {currentPage} dari {numPages || 1}
-            </span>
             <button
               onClick={() => setCurrentPage(p => Math.min(numPages, p + 1))}
               disabled={currentPage >= numPages || isLoadingPdf}
-              className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 transition-colors cursor-pointer"
+              className="p-1 border border-black dark:border-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 cursor-pointer"
               title="Halaman Berikutnya"
             >
-              <ChevronRight className="w-4 h-4 stroke-[3]" />
+              <ChevronRight className="w-3.5 h-3.5 stroke-[3]" />
             </button>
           </div>
 
           {/* Zoom Controls */}
-          <div className="flex items-center bg-white dark:bg-[#181818] border-2 border-black dark:border-white rounded-xl shadow-neo-sm overflow-hidden">
+          <div className="flex items-center gap-1 bg-slate-100 dark:bg-[#2A2A2A] border border-black dark:border-white rounded-xl px-1.5 py-0.5">
             <button
               onClick={() => setScale(s => Math.max(0.6, Number((s - 0.2).toFixed(1))))}
-              className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Perkecil (-)"
+              className="p-1 hover:bg-white dark:hover:bg-slate-700 rounded cursor-pointer"
+              title="Zoom Out (-)"
             >
-              <ZoomOut className="w-4 h-4 stroke-[2.5]" />
+              <ZoomOut className="w-3.5 h-3.5 stroke-[2.5]" />
             </button>
-            <span className="px-2 text-xs font-black">
+            <span className="px-1 text-[11px] font-black">
               {Math.round(scale * 100)}%
             </span>
             <button
               onClick={() => setScale(s => Math.min(2.5, Number((s + 0.2).toFixed(1))))}
-              className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Perbesar (+)"
+              className="p-1 hover:bg-white dark:hover:bg-slate-700 rounded cursor-pointer"
+              title="Zoom In (+)"
             >
-              <ZoomIn className="w-4 h-4 stroke-[2.5]" />
+              <ZoomIn className="w-3.5 h-3.5 stroke-[2.5]" />
             </button>
+          </div>
+
+          {/* Per-Page Actions: Rotate Left, Rotate Right, Insert Blank, Delete Page */}
+          <div className="flex items-center gap-1.5">
             <button
-              onClick={() => setScale(1.0)}
-              className="px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800 border-l border-black/20 dark:border-white/20 text-[10px] uppercase font-black cursor-pointer"
-              title="Reset Zoom 100%"
+              onClick={() => handleRotatePage('ccw')}
+              className="p-1.5 border border-black dark:border-white rounded-xl hover:bg-neo-yellow text-black dark:text-white dark:hover:text-black shadow-neo-sm transition cursor-pointer"
+              title="Putar Halaman Kiri (-90°)"
             >
-              100%
+              <RotateCcw className="w-3.5 h-3.5 stroke-[2.5]" />
+            </button>
+
+            <button
+              onClick={() => handleRotatePage('cw')}
+              className="p-1.5 border border-black dark:border-white rounded-xl hover:bg-neo-yellow text-black dark:text-white dark:hover:text-black shadow-neo-sm transition cursor-pointer"
+              title="Putar Halaman Kanan (+90°)"
+            >
+              <RotateCw className="w-3.5 h-3.5 stroke-[2.5]" />
+            </button>
+
+            <button
+              onClick={handleInsertPage}
+              className="p-1.5 border border-black dark:border-white rounded-xl hover:bg-neo-green text-black dark:text-white dark:hover:text-black shadow-neo-sm transition cursor-pointer"
+              title="+ Sisipkan Halaman Baru di Sini"
+            >
+              <Plus className="w-3.5 h-3.5 stroke-[3]" />
+            </button>
+
+            <button
+              onClick={handleDeletePage}
+              className="p-1.5 border border-black dark:border-white rounded-xl hover:bg-rose-500 text-rose-600 hover:text-white shadow-neo-sm transition cursor-pointer"
+              title="Hapus Halaman Ini"
+            >
+              <Trash2 className="w-3.5 h-3.5 stroke-[2.5]" />
             </button>
           </div>
         </div>
 
-        {/* Tools Palette */}
-        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-          {/* Select Mode */}
-          <button
-            onClick={() => setActiveTool('select')}
-            className={`px-3 py-1.5 rounded-xl border-2 border-black dark:border-white uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
-              activeTool === 'select'
-                ? 'bg-black text-white dark:bg-white dark:text-black shadow-neo-sm scale-105'
-                : 'bg-white dark:bg-[#181818] hover:bg-slate-100 dark:hover:bg-slate-800'
-            }`}
-          >
-            <MousePointer className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>Pilih</span>
-          </button>
-
-          {/* Tambah Teks */}
-          <button
-            onClick={() => setActiveTool('text')}
-            className={`px-3 py-1.5 rounded-xl border-2 border-black dark:border-white uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
-              activeTool === 'text'
-                ? 'bg-neo-yellow text-black shadow-neo-sm scale-105 ring-2 ring-black'
-                : 'bg-white dark:bg-[#181818] hover:bg-neo-yellow/30'
-            }`}
-          >
-            <Type className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>Teks Baru</span>
-          </button>
-
-          {/* Tanda Tangan */}
-          <button
-            onClick={() => setIsSigModalOpen(true)}
-            className="px-3 py-1.5 rounded-xl border-2 border-black dark:border-white bg-neo-pink hover:bg-pink-400 text-black uppercase flex items-center gap-1.5 shadow-neo-sm active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer"
-          >
-            <PenTool className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>Tanda Tangan</span>
-          </button>
-
-          {/* Stempel / Gambar */}
-          <button
-            onClick={() => stampInputRef.current?.click()}
-            className="px-3 py-1.5 rounded-xl border-2 border-black dark:border-white bg-neo-blue hover:bg-cyan-300 text-black uppercase flex items-center gap-1.5 shadow-neo-sm active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer"
-          >
-            <ImageIcon className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>Stempel / Foto</span>
-          </button>
-
-          {/* Tutup Teks (Whiteout) */}
-          <button
-            onClick={() => setActiveTool('whiteout')}
-            className={`px-3 py-1.5 rounded-xl border-2 border-black dark:border-white uppercase flex items-center gap-1.5 transition-all cursor-pointer ${
-              activeTool === 'whiteout'
-                ? 'bg-white text-black shadow-neo-sm scale-105 ring-2 ring-rose-500'
-                : 'bg-white dark:bg-[#181818] hover:bg-slate-100 dark:hover:bg-slate-800'
-            }`}
-          >
-            <Square className="w-3.5 h-3.5 stroke-[2.5] fill-white" />
-            <span>Tutup Teks (Whiteout)</span>
-          </button>
-        </div>
-
-        {/* Selected Item Properties Bar (Font Size, Bold, Italic, Color) */}
-        {selectedAnn?.type === 'text' && (
-          <div className="flex items-center gap-2 bg-white dark:bg-[#181818] border-2 border-black dark:border-white rounded-xl px-3 py-1 shadow-neo-sm">
-            {/* Font Size */}
-            <span className="text-[10px] text-slate-500 uppercase">Ukuran:</span>
-            <select
-              value={selectedAnn.fontSize || fontSize}
-              onChange={(e) => {
-                const newSize = Number(e.target.value);
-                setFontSize(newSize);
-                setAnnotations(prev =>
-                  prev.map(a => (a.id === selectedAnn.id ? { ...a, fontSize: newSize } : a))
-                );
-              }}
-              className="bg-transparent border border-black/30 dark:border-white/30 rounded text-xs px-1.5 py-0.5 font-black cursor-pointer"
-            >
-              {[12, 14, 16, 20, 24, 32].map(s => (
-                <option key={s} value={s} className="text-black">{s} pt</option>
-              ))}
-            </select>
-
-            {/* Bold Toggle */}
-            <button
-              onClick={() => {
-                const nextBold = !(selectedAnn.isBold ?? isBold);
-                setIsBold(nextBold);
-                setAnnotations(prev =>
-                  prev.map(a => (a.id === selectedAnn.id ? { ...a, isBold: nextBold } : a))
-                );
-              }}
-              className={`p-1 border border-black dark:border-white rounded cursor-pointer transition-colors ${
-                (selectedAnn.isBold ?? isBold) ? 'bg-neo-yellow text-black' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-              title="Tebal (Bold)"
-            >
-              <Bold className="w-3.5 h-3.5 stroke-[3]" />
-            </button>
-
-            {/* Italic Toggle */}
-            <button
-              onClick={() => {
-                const nextItalic = !(selectedAnn.isItalic ?? isItalic);
-                setIsItalic(nextItalic);
-                setAnnotations(prev =>
-                  prev.map(a => (a.id === selectedAnn.id ? { ...a, isItalic: nextItalic } : a))
-                );
-              }}
-              className={`p-1 border border-black dark:border-white rounded cursor-pointer transition-colors ${
-                (selectedAnn.isItalic ?? isItalic) ? 'bg-neo-yellow text-black' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-              title="Miring (Italic)"
-            >
-              <Italic className="w-3.5 h-3.5 stroke-[3]" />
-            </button>
-
-            {/* Color Swatches */}
-            <div className="flex items-center gap-1 ml-1">
-              {[
-                { label: 'Hitam', value: '#000000' },
-                { label: 'Merah', value: '#DC2626' },
-                { label: 'Biru', value: '#0B3B8B' },
-                { label: 'Hijau', value: '#16A34A' },
-                { label: 'Putih', value: '#FFFFFF' }
-              ].map(c => (
-                <button
-                  key={c.value}
-                  onClick={() => {
-                    setTextColor(c.value);
-                    setAnnotations(prev =>
-                      prev.map(a => (a.id === selectedAnn.id ? { ...a, color: c.value } : a))
-                    );
-                  }}
-                  className={`w-4 h-4 rounded-full border border-black transition-transform cursor-pointer ${
-                    (selectedAnn.color || textColor) === c.value ? 'scale-125 ring-2 ring-black dark:ring-white' : ''
-                  }`}
-                  style={{ backgroundColor: c.value }}
-                  title={c.label}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* MAIN DOCUMENT CANVAS AREA */}
-      <div className="flex-1 overflow-auto bg-slate-200 dark:bg-[#121212] p-4 sm:p-8 flex items-center justify-center relative">
-        
-        {/* Loading PDF */}
+        {/* Loading PDF indicator */}
         {isLoadingPdf && (
-          <div className="flex flex-col items-center gap-3 bg-white dark:bg-[#1E1E1E] border-[3px] border-black dark:border-white rounded-2xl p-6 shadow-neo-lg text-black dark:text-white">
+          <div className="flex flex-col items-center gap-3 bg-white dark:bg-[#1E1E1E] border-[3px] border-black dark:border-white rounded-2xl p-6 shadow-neo-lg text-black dark:text-white my-auto">
             <Loader2 className="w-8 h-8 animate-spin text-neo-pink stroke-[2.5]" />
             <span className="font-black text-xs uppercase tracking-wider">
               Merender Dokumen PDF...
@@ -789,7 +1021,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
         {/* Error Notification */}
         {errorMessage && (
-          <div className="bg-red-100 border-[3px] border-red-900 rounded-2xl p-6 text-red-900 max-w-md shadow-neo">
+          <div className="bg-red-100 border-[3px] border-red-900 rounded-2xl p-6 text-red-900 max-w-md shadow-neo my-auto">
             <p className="font-black text-sm uppercase mb-2">Terjadi Kesalahan</p>
             <p className="text-xs font-bold leading-relaxed">{errorMessage}</p>
           </div>
@@ -798,7 +1030,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
         {/* PDF Page Wrapper Container */}
         {!isLoadingPdf && !errorMessage && (
           <div
-            className={`relative bg-white shadow-[12px_12px_0px_#000] dark:shadow-[12px_12px_0px_#FFF] border-[3px] border-black dark:border-white transition-all ${
+            className={`relative bg-white shadow-[10px_10px_0px_#000] dark:shadow-[10px_10px_0px_#FFF] border-[3px] border-black dark:border-white transition-all ${
               activeTool !== 'select' ? 'cursor-crosshair' : 'cursor-default'
             }`}
             style={{
@@ -813,12 +1045,12 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
             <div
               ref={overlayRef}
               onClick={handleOverlayClick}
-              className="absolute inset-0 z-10 overflow-hidden"
+              className="absolute inset-0 z-10 overflow-visible"
             >
               {pageAnnotations.map((ann) => {
                 const isSelected = selectedAnnId === ann.id;
 
-                // Relative calculation: Natural Points -> Screen Pixels
+                // Zoom-independent relative calculation
                 const screenX = (ann.x / naturalDimensions.width) * viewportDimensions.width;
                 const screenY = (ann.y / naturalDimensions.height) * viewportDimensions.height;
                 const screenW = (ann.width / naturalDimensions.width) * viewportDimensions.width;
@@ -832,24 +1064,104 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       setSelectedAnnId(ann.id);
                     }}
                     onMouseDown={(e) => handleMouseDownItem(e, ann.id, 'move')}
-                    className={`absolute group cursor-move select-none transition-shadow ${
-                      isSelected
-                        ? 'ring-2 ring-black dark:ring-white border-2 border-dashed border-black/80'
-                        : 'hover:ring-1 hover:ring-black/60'
+                    className={`absolute select-none transition-shadow ${
+                      ann.type === 'text'
+                        ? isSelected
+                          ? 'border border-blue-500 ring-1 ring-blue-400/50 cursor-move'
+                          : 'border border-transparent hover:border-blue-400/40 cursor-text'
+                        : isSelected
+                        ? 'border-2 border-dashed border-black dark:border-white cursor-move'
+                        : 'hover:border border-black/40 cursor-move'
                     }`}
                     style={{
                       left: screenX,
                       top: screenY,
-                      width: screenW,
-                      height: screenH
+                      width: ann.type === 'text' ? 'auto' : screenW,
+                      height: ann.type === 'text' ? 'auto' : screenH,
+                      minWidth: ann.type === 'text' ? '40px' : undefined
                     }}
                   >
-                    {/* FLOATING ACTION TOOLBAR (SEJDA STYLE: DUPLICATE & TRASH) */}
+                    {/* FLOATING ACTION TOOLBAR (SEJDA STYLE: DOCKED DIRECTLY ABOVE ACTIVE ITEM) */}
                     {isSelected && (
                       <div
-                        className="absolute -top-10 left-0 bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-xl shadow-neo-sm px-1.5 py-0.5 flex items-center gap-1 z-40 text-black dark:text-white animate-in fade-in duration-100"
+                        className="absolute -top-11 left-0 bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-xl shadow-neo-sm px-2 py-1 flex items-center gap-1.5 z-40 text-black dark:text-white animate-in fade-in duration-100 whitespace-nowrap"
                         onMouseDown={(e) => e.stopPropagation()}
                       >
+                        {/* If text: Quick format controls */}
+                        {ann.type === 'text' && (
+                          <>
+                            {/* Font size */}
+                            <select
+                              value={ann.fontSize || fontSize}
+                              onChange={(e) => {
+                                const newSize = Number(e.target.value);
+                                setFontSize(newSize);
+                                const updated = annotations.map(a => (a.id === ann.id ? { ...a, fontSize: newSize } : a));
+                                setAnnotations(updated);
+                                pushHistory(updated);
+                              }}
+                              className="bg-slate-100 dark:bg-[#252525] border border-black/30 rounded text-xs px-1.5 py-0.5 font-black cursor-pointer"
+                            >
+                              {[10, 12, 14, 16, 18, 20, 24, 32].map(s => (
+                                <option key={s} value={s}>{s} pt</option>
+                              ))}
+                            </select>
+
+                            {/* Bold */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextBold = !ann.isBold;
+                                setIsBold(nextBold);
+                                const updated = annotations.map(a => (a.id === ann.id ? { ...a, isBold: nextBold } : a));
+                                setAnnotations(updated);
+                                pushHistory(updated);
+                              }}
+                              className={`p-1 rounded cursor-pointer ${ann.isBold ? 'bg-neo-yellow text-black font-black' : 'hover:bg-slate-100'}`}
+                              title="Tebal (Bold)"
+                            >
+                              <Bold className="w-3.5 h-3.5 stroke-[3]" />
+                            </button>
+
+                            {/* Italic */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextItalic = !ann.isItalic;
+                                setIsItalic(nextItalic);
+                                const updated = annotations.map(a => (a.id === ann.id ? { ...a, isItalic: nextItalic } : a));
+                                setAnnotations(updated);
+                                pushHistory(updated);
+                              }}
+                              className={`p-1 rounded cursor-pointer ${ann.isItalic ? 'bg-neo-yellow text-black font-black' : 'hover:bg-slate-100'}`}
+                              title="Miring (Italic)"
+                            >
+                              <Italic className="w-3.5 h-3.5 stroke-[3]" />
+                            </button>
+
+                            {/* Colors */}
+                            <div className="flex items-center gap-1 mx-1">
+                              {['#000000', '#DC2626', '#0B3B8B', '#16A34A'].map(color => (
+                                <button
+                                  key={color}
+                                  onClick={() => {
+                                    setTextColor(color);
+                                    const updated = annotations.map(a => (a.id === ann.id ? { ...a, color } : a));
+                                    setAnnotations(updated);
+                                    pushHistory(updated);
+                                  }}
+                                  className={`w-3.5 h-3.5 rounded-full border border-black transition-transform cursor-pointer ${
+                                    ann.color === color ? 'scale-125 ring-1 ring-black' : ''
+                                  }`}
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                            </div>
+                            <div className="w-[1px] h-4 bg-slate-300 dark:bg-slate-700 mx-0.5" />
+                          </>
+                        )}
+
+                        {/* Duplicate */}
                         <button
                           type="button"
                           onClick={(e) => handleDuplicate(ann.id, e)}
@@ -859,6 +1171,7 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                           <Copy className="w-3.5 h-3.5 stroke-[2.5]" />
                         </button>
 
+                        {/* Delete */}
                         <button
                           type="button"
                           onClick={(e) => handleDelete(ann.id, e)}
@@ -872,20 +1185,27 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
 
                     {/* CONTENT RENDERER BASED ON TYPE */}
 
-                    {/* Type 1: Text */}
+                    {/* Type 1: Seamless Sejda Text Box */}
                     {ann.type === 'text' && (
-                      <input
-                        type="text"
-                        value={ann.text || ''}
-                        onChange={(e) => handleTextChange(ann.id, e.target.value)}
+                      <textarea
+                        rows={1}
+                        value={ann.text ?? ''}
+                        placeholder="Type your text"
+                        onChange={(e) => {
+                          handleTextChange(ann.id, e.target.value);
+                          e.target.style.height = 'auto';
+                          e.target.style.height = `${e.target.scrollHeight}px`;
+                        }}
+                        onBlur={() => pushHistory(annotations)}
                         onMouseDown={(e) => e.stopPropagation()}
                         style={{
-                          fontSize: `${((ann.fontSize || 16) * scale)}px`,
+                          fontSize: `${((ann.fontSize || 14) * scale)}px`,
                           color: ann.color || '#000000',
                           fontWeight: ann.isBold ? 800 : 500,
-                          fontStyle: ann.isItalic ? 'italic' : 'normal'
+                          fontStyle: ann.isItalic ? 'italic' : 'normal',
+                          lineHeight: '1.2'
                         }}
-                        className="w-full h-full bg-transparent outline-none border-none px-1 tracking-tight"
+                        className="w-full bg-transparent resize-none overflow-hidden outline-none border-none p-0 m-0 font-sans tracking-tight placeholder:text-slate-400 block whitespace-pre-wrap"
                       />
                     )}
 
@@ -894,7 +1214,58 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       <div className="w-full h-full bg-white shadow-sm border border-slate-300" />
                     )}
 
-                    {/* Type 3: Signature or Image Stamp */}
+                    {/* Type 3: Highlight Box */}
+                    {ann.type === 'highlight' && (
+                      <div className="w-full h-full bg-[#FFE600]/40 border-b-2 border-amber-400" />
+                    )}
+
+                    {/* Type 4: Shape Rect */}
+                    {ann.type === 'rect' && (
+                      <div
+                        className="w-full h-full border-2"
+                        style={{ borderColor: ann.color || '#000000' }}
+                      />
+                    )}
+
+                    {/* Type 5: Shape Circle */}
+                    {ann.type === 'circle' && (
+                      <div
+                        className="w-full h-full border-2 rounded-full"
+                        style={{ borderColor: ann.color || '#000000' }}
+                      />
+                    )}
+
+                    {/* Type 6: Shape Line */}
+                    {ann.type === 'line' && (
+                      <div
+                        className="w-full h-[2px]"
+                        style={{ backgroundColor: ann.color || '#000000' }}
+                      />
+                    )}
+
+                    {/* Type 7: Link Box */}
+                    {ann.type === 'link' && (
+                      <div className="w-full h-full bg-sky-200/40 border-2 border-dashed border-sky-500 rounded p-1 flex items-center justify-center text-[10px] font-bold text-sky-800">
+                        {ann.url}
+                      </div>
+                    )}
+
+                    {/* Type 8: Form Checkbox */}
+                    {ann.type === 'form' && (
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const updated = annotations.map(a => (a.id === ann.id ? { ...a, checked: !a.checked } : a));
+                          setAnnotations(updated);
+                          pushHistory(updated);
+                        }}
+                        className="w-full h-full border-2 border-black bg-white rounded cursor-pointer flex items-center justify-center font-black text-xs"
+                      >
+                        {ann.checked && '✓'}
+                      </div>
+                    )}
+
+                    {/* Type 9: Signature or Image Stamp */}
                     {(ann.type === 'signature' || ann.type === 'image') && ann.imageData && (
                       <img
                         src={ann.imageData}
@@ -903,28 +1274,24 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
                       />
                     )}
 
-                    {/* 4-CORNER RESIZE HANDLES (SEJDA STYLE) */}
-                    {isSelected && (
+                    {/* 4-CORNER RESIZE HANDLES (MINIMALIST SEJDA STYLE) */}
+                    {isSelected && ann.type !== 'text' && (
                       <>
-                        {/* Top-Left */}
                         <div
                           onMouseDown={(e) => handleMouseDownItem(e, ann.id, 'resize', 'tl')}
-                          className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-neo-yellow border-2 border-black rounded-sm cursor-nwse-resize shadow-neo-sm z-30"
+                          className="absolute -top-1 -left-1 w-2.5 h-2.5 bg-blue-500 border border-white rounded-full cursor-nwse-resize z-30"
                         />
-                        {/* Top-Right */}
                         <div
                           onMouseDown={(e) => handleMouseDownItem(e, ann.id, 'resize', 'tr')}
-                          className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-neo-yellow border-2 border-black rounded-sm cursor-nesw-resize shadow-neo-sm z-30"
+                          className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-blue-500 border border-white rounded-full cursor-nesw-resize z-30"
                         />
-                        {/* Bottom-Left */}
                         <div
                           onMouseDown={(e) => handleMouseDownItem(e, ann.id, 'resize', 'bl')}
-                          className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-neo-yellow border-2 border-black rounded-sm cursor-nesw-resize shadow-neo-sm z-30"
+                          className="absolute -bottom-1 -left-1 w-2.5 h-2.5 bg-blue-500 border border-white rounded-full cursor-nesw-resize z-30"
                         />
-                        {/* Bottom-Right */}
                         <div
                           onMouseDown={(e) => handleMouseDownItem(e, ann.id, 'resize', 'br')}
-                          className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-neo-yellow border-2 border-black rounded-sm cursor-nwse-resize shadow-neo-sm z-30"
+                          className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-blue-500 border border-white rounded-full cursor-nwse-resize z-30"
                         />
                       </>
                     )}
@@ -934,6 +1301,31 @@ export const PdfSignEditor: React.FC<PdfSignEditorProps> = ({
             </div>
           </div>
         )}
+
+        {/* FLOATING BOTTOM CTA (SEJDA STYLE: "TERAPKAN PERUBAHAN & UNDUH PDF") */}
+        <div className="sticky bottom-6 mt-8 z-30 flex items-center justify-center">
+          <button
+            onClick={handleApplyAndDownload}
+            disabled={isApplying || isLoadingPdf}
+            className={`px-8 py-4 border-[3px] border-black dark:border-white rounded-2xl font-black text-sm uppercase tracking-wider flex items-center gap-3 shadow-[6px_6px_0px_#000] dark:shadow-[6px_6px_0px_#FFF] transition-all cursor-pointer ${
+              isApplying || isLoadingPdf
+                ? 'bg-slate-200 dark:bg-slate-700 text-slate-400 cursor-not-allowed border-dashed'
+                : 'bg-neo-green text-black hover:bg-emerald-400 hover:translate-x-[-2px] hover:translate-y-[-2px] active:translate-x-1 active:translate-y-1'
+            }`}
+          >
+            {isApplying ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin text-black" />
+                <span>{applyStep || 'Menerapkan Perubahan...'}</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-5 h-5 stroke-[2.5]" />
+                <span>TERAPKAN PERUBAHAN & UNDUH PDF</span>
+              </>
+            )}
+          </button>
+        </div>
 
       </div>
     </div>

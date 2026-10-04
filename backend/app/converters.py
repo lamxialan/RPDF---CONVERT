@@ -321,20 +321,27 @@ def dispatch_conversion(input_path: str, output_path: str, source_ext: str, targ
 
 def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload) -> int:
     """
-    Menyisipkan anotasi (teks, tanda tangan, stempel gambar, kotak whiteout)
-    ke dokumen PDF menggunakan PyMuPDF (fitz) dengan standar Sejda PDF Editor.
-    Mendukung payload berupa array objek anotasi atau object grouped by page.
+    Menyisipkan anotasi (teks, tanda tangan, stempel gambar, kotak whiteout, shapes, highlight, link)
+    dan manipulasi halaman (rotate, insert, delete) ke dokumen PDF menggunakan PyMuPDF (fitz)
+    sesuai standar Sejda PDF Editor.
     """
     import fitz
     import base64
 
     doc = fitz.open(input_path)
-    total_pages = len(doc)
-    applied_count = 0
 
-    # Normalisasi format payload (bisa flat array atau dict grouped-by-page)
+    # Normalisasi format payload
+    deleted_pages = []
+    page_rotations = {}
+    insert_pages = []
     annotations = []
-    if isinstance(annotations_payload, list):
+
+    if isinstance(annotations_payload, dict) and ("annotations" in annotations_payload or "deleted_pages" in annotations_payload):
+        annotations = annotations_payload.get("annotations", [])
+        deleted_pages = annotations_payload.get("deleted_pages", [])
+        page_rotations = annotations_payload.get("page_rotations", {})
+        insert_pages = annotations_payload.get("insert_pages", [])
+    elif isinstance(annotations_payload, list):
         annotations = annotations_payload
     elif isinstance(annotations_payload, dict):
         for page_k, items in annotations_payload.items():
@@ -348,12 +355,33 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload
                                 item["page"] = 1
                         annotations.append(item)
 
+    # 1. Rotasi halaman jika diminta
+    for p_str, rot in page_rotations.items():
+        try:
+            p_idx = int(p_str) - 1
+            if 0 <= p_idx < len(doc):
+                doc[p_idx].set_rotation((doc[p_idx].rotation + int(rot)) % 360)
+        except Exception:
+            pass
+
+    # 2. Sisipkan halaman kosong baru jika diminta
+    for ins in sorted(insert_pages, reverse=True):
+        try:
+            ins_idx = int(ins)
+            if 0 <= ins_idx <= len(doc):
+                doc.new_page(ins_idx)
+        except Exception:
+            pass
+
+    # 3. Menerapkan Anotasi
+    total_pages = len(doc)
+    applied_count = 0
+
     for ann in annotations:
         if not isinstance(ann, dict):
             continue
 
         page_num = ann.get("page", 1)
-        # Normalisasi ke 0-indexed
         try:
             page_idx = int(page_num) - 1 if int(page_num) >= 1 else 0
         except (ValueError, TypeError):
@@ -366,7 +394,6 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload
         p_width = page.rect.width
         p_height = page.rect.height
 
-        # Frontend scaling reference: jika ada page_width & page_height dari canvas
         ref_w = float(ann.get("page_width") or p_width)
         ref_h = float(ann.get("page_height") or p_height)
         scale_x = (p_width / ref_w) if ref_w > 0 else 1.0
@@ -378,6 +405,21 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload
         w = max(1.0, float(ann.get("width", 0)) * scale_x)
         h = max(1.0, float(ann.get("height", 0)) * scale_y)
 
+        # Parse warna hex
+        hex_color = str(ann.get("color", "#000000")).lstrip("#")
+        if len(hex_color) == 6:
+            try:
+                r = int(hex_color[0:2], 16) / 255.0
+                g = int(hex_color[2:4], 16) / 255.0
+                b = int(hex_color[4:6], 16) / 255.0
+                color = (r, g, b)
+            except ValueError:
+                color = (0, 0, 0)
+        elif hex_color.lower() in ["fff", "ffffff"]:
+            color = (1, 1, 1)
+        else:
+            color = (0, 0, 0)
+
         if ann_type == "text":
             text = str(ann.get("text", "")).strip()
             if not text:
@@ -388,33 +430,17 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload
                 raw_font_size = 14.0
             font_size = max(8.0, raw_font_size * scale_y)
 
-            # Warna teks
-            hex_color = str(ann.get("color", "#000000")).lstrip("#")
-            if len(hex_color) == 6:
-                try:
-                    r = int(hex_color[0:2], 16) / 255.0
-                    g = int(hex_color[2:4], 16) / 255.0
-                    b = int(hex_color[4:6], 16) / 255.0
-                    color = (r, g, b)
-                except ValueError:
-                    color = (0, 0, 0)
-            elif hex_color.lower() == "fff" or hex_color.lower() == "ffffff":
-                color = (1, 1, 1)
-            else:
-                color = (0, 0, 0)
-
-            # Font styling: Bold / Italic
             is_bold = bool(ann.get("isBold") or ann.get("bold"))
             is_italic = bool(ann.get("isItalic") or ann.get("italic"))
 
             if is_bold and is_italic:
-                fontname = "hebi"  # Helvetica Bold-Oblique
+                fontname = "hebi"
             elif is_bold:
-                fontname = "hebo"  # Helvetica Bold
+                fontname = "hebo"
             elif is_italic:
-                fontname = "heit"  # Helvetica Oblique
+                fontname = "heit"
             else:
-                fontname = "helv"  # Helvetica Regular
+                fontname = "helv"
 
             rect = fitz.Rect(x, y, x + max(w, 250), y + max(h, font_size * 2))
             try:
@@ -429,10 +455,36 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload
             applied_count += 1
 
         elif ann_type == "whiteout":
-            # Kotak penutup putih solid untuk menutupi bagian teks/informasi lama
             rect = fitz.Rect(x, y, x + w, y + h)
-            # Default putih murni (1, 1, 1)
             page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1), width=0)
+            applied_count += 1
+
+        elif ann_type == "highlight":
+            rect = fitz.Rect(x, y, x + w, y + h)
+            page.draw_rect(rect, color=(1, 0.9, 0), fill=(1, 0.9, 0), fill_opacity=0.4, width=0)
+            applied_count += 1
+
+        elif ann_type in ["rect", "shape_rect"]:
+            rect = fitz.Rect(x, y, x + w, y + h)
+            page.draw_rect(rect, color=color, width=2)
+            applied_count += 1
+
+        elif ann_type in ["circle", "shape_circle"]:
+            rect = fitz.Rect(x, y, x + w, y + h)
+            page.draw_oval(rect, color=color, width=2)
+            applied_count += 1
+
+        elif ann_type in ["line", "shape_line"]:
+            page.draw_line(fitz.Point(x, y), fitz.Point(x + w, y + h), color=color, width=2)
+            applied_count += 1
+
+        elif ann_type == "link":
+            uri = str(ann.get("url") or ann.get("uri") or "https://")
+            rect = fitz.Rect(x, y, x + w, y + h)
+            try:
+                page.insert_link({"kind": fitz.LINK_URI, "from": rect, "uri": uri})
+            except Exception:
+                pass
             applied_count += 1
 
         elif ann_type in ["signature", "image", "stamp"]:
@@ -448,6 +500,20 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload
                 applied_count += 1
             except Exception:
                 pass
+
+    # 4. Hapus halaman tertentu jika diminta (mundur dari indeks tertinggi)
+    if deleted_pages and len(deleted_pages) < len(doc):
+        del_indices = set()
+        for dp in deleted_pages:
+            try:
+                d_idx = int(dp) - 1
+                if 0 <= d_idx < len(doc):
+                    del_indices.add(d_idx)
+            except Exception:
+                pass
+        for idx in sorted(list(del_indices), reverse=True):
+            if len(doc) > 1:
+                doc.delete_page(idx)
 
     doc.save(output_path, deflate=True, garbage=4, clean=True)
     doc.close()
