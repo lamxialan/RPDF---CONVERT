@@ -4,6 +4,8 @@ import { DocumentConverter } from './components/DocumentConverter';
 import { ImageConverter } from './components/ImageConverter';
 import { RemoveBgConverter } from './components/RemoveBgConverter';
 import { PdfUtility } from './components/PdfUtility';
+import { RecentActivity } from './components/RecentActivity';
+import { TrustFaq } from './components/TrustFaq';
 import { ActiveTab } from './types';
 import { ShieldCheck, Zap, Layers, Minimize2, FileText, Image as ImageIcon, Wand2 } from 'lucide-react';
 
@@ -36,7 +38,7 @@ export const App: React.FC = () => {
       case 'pdf-tools':
         return {
           title: 'SUITE ALAT PDF PRO',
-          desc: '8 Modul Lengkap PDF: Word (.docx), Split, Merge, Kompres, Protect, Unlock, Watermark, & Nomor Halaman.',
+          desc: '11 Modul Lengkap PDF: Word (.docx), Gambar ke PDF, PDF ke Gambar, Kelola & Putar, Split, Merge, Kompres, Protect, Unlock, Watermark, & Nomor Halaman.',
           color: 'bg-neo-yellow',
           icon: <Layers className="w-4 h-4 stroke-[2.5]" />
         };
@@ -67,7 +69,7 @@ export const App: React.FC = () => {
   const currentModule = getModuleInfo(activeTab);
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F8F7F3] text-black relative overflow-x-hidden selection:bg-neo-yellow selection:text-black">
+    <div className="min-h-screen flex flex-col bg-[#F8F7F3] dark:bg-[#121212] text-black dark:text-white relative overflow-x-hidden selection:bg-neo-yellow selection:text-black transition-colors duration-200">
 
       {/* Neo-Brutalist Retro Decorative Elements in Background */}
 
@@ -108,32 +110,32 @@ export const App: React.FC = () => {
       </div>
 
       {/* Floating Retro Geometric Shapes */}
-      <div className="fixed top-14 left-[-35px] w-48 h-48 rounded-full bg-neo-yellow/20 border-2 border-black/15 pointer-events-none -z-10" />
-      <div className="fixed bottom-16 right-[-30px] w-60 h-60 rounded-full bg-neo-pink/20 border-2 border-black/15 pointer-events-none -z-10" />
-      <div className="fixed top-1/2 left-[5%] w-20 h-20 rounded-2xl rotate-12 bg-neo-purple/15 border-2 border-black/15 pointer-events-none -z-10" />
-      <div className="fixed top-2/3 right-[7%] w-24 h-24 rounded-2xl -rotate-12 bg-neo-green/20 border-2 border-black/15 pointer-events-none -z-10" />
+      <div className="fixed top-14 left-[-35px] w-48 h-48 rounded-full bg-neo-yellow/20 dark:bg-neo-yellow/10 border-2 border-black/15 dark:border-white/10 pointer-events-none -z-10" />
+      <div className="fixed bottom-16 right-[-30px] w-60 h-60 rounded-full bg-neo-pink/20 dark:bg-neo-pink/10 border-2 border-black/15 dark:border-white/10 pointer-events-none -z-10" />
+      <div className="fixed top-1/2 left-[5%] w-20 h-20 rounded-2xl rotate-12 bg-neo-purple/15 dark:bg-neo-purple/10 border-2 border-black/15 dark:border-white/10 pointer-events-none -z-10" />
+      <div className="fixed top-2/3 right-[7%] w-24 h-24 rounded-2xl -rotate-12 bg-neo-green/20 dark:bg-neo-green/10 border-2 border-black/15 dark:border-white/10 pointer-events-none -z-10" />
 
       {/* Top Sticky Navbar (Primary Navigation Hub) */}
       <Navbar activeTab={activeTab} onTabChange={setActiveTab} />
 
       <main className="flex-1 flex flex-col items-center justify-center px-4 py-8 relative z-10">
 
-        {/* Hero Section (Clean, Bold, Tanpa Duplikasi Tab) */}
+        {/* Hero Section */}
         <div className="mb-8 w-full max-w-3xl flex flex-col items-center text-center">
 
           {/* Active Module Indicator Badge */}
-          <div className="inline-flex items-center gap-2 bg-white border-2 border-black rounded-full px-4 py-1.5 shadow-neo font-black text-xs uppercase mb-4 tracking-wider">
+          <div className="inline-flex items-center gap-2 bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-full px-4 py-1.5 shadow-neo dark:shadow-neo-dark font-black text-xs uppercase mb-4 tracking-wider text-black dark:text-white">
             <span className={`w-3 h-3 rounded-full border border-black ${currentModule.color} flex-shrink-0 animate-ping`} />
             <div className="flex items-center gap-1.5">
               {currentModule.icon}
-              <span className="text-black">{currentModule.title}</span>
+              <span>{currentModule.title}</span>
             </div>
           </div>
 
-          <h1 className="text-4xl sm:text-6xl font-black tracking-tight uppercase text-black mb-3">
+          <h1 className="text-4xl sm:text-6xl font-black tracking-tight uppercase text-black dark:text-white mb-3">
             RPDF CONVERTER<span className="text-neo-pink">.</span>
           </h1>
-          <p className="text-sm sm:text-base font-bold text-slate-700 max-w-xl mx-auto">
+          <p className="text-sm sm:text-base font-bold text-slate-700 dark:text-slate-300 max-w-xl mx-auto">
             {currentModule.desc}
           </p>
         </div>
@@ -163,22 +165,25 @@ export const App: React.FC = () => {
           />
         )}
 
+        {/* Local Download History / Recent Activity */}
+        <RecentActivity />
+
         {/* 3 Bottom Feature Cards: Folder Tab Design with Rounded Corners */}
-        <div className="max-w-4xl mx-auto mt-16 grid grid-cols-1 sm:grid-cols-3 gap-6 w-full">
+        <div className="max-w-4xl mx-auto mt-16 grid grid-cols-1 sm:grid-cols-3 gap-6 w-full px-4">
 
           {/* Folder Card 1: Google Docs Ready */}
           <div className="relative pt-6">
             <div className="absolute top-0 left-4 bg-neo-green text-black border-t-[3px] border-l-[3px] border-r-[3px] border-black rounded-t-xl px-4 py-1 text-xs font-black uppercase shadow-neo-sm">
               TAB #01
             </div>
-            <div className="bg-white border-[3px] border-black rounded-3xl p-6 shadow-neo-lg flex flex-col items-start h-full overflow-hidden">
-              <div className="w-12 h-12 bg-neo-green border-2 border-black rounded-2xl flex items-center justify-center shadow-neo-sm mb-4">
+            <div className="bg-white dark:bg-[#1E1E1E] border-[3px] border-black dark:border-white rounded-3xl p-6 shadow-neo-lg dark:shadow-neo-dark flex flex-col items-start h-full overflow-hidden text-black dark:text-white">
+              <div className="w-12 h-12 bg-neo-green border-2 border-black rounded-2xl flex items-center justify-center shadow-neo-sm mb-4 text-black">
                 <ShieldCheck className="w-6 h-6 stroke-[2.5]" />
               </div>
-              <h3 className="font-black text-lg text-black uppercase mb-1">
+              <h3 className="font-black text-lg uppercase mb-1">
                 Google Docs Ready
               </h3>
-              <p className="text-xs font-bold text-slate-700 leading-relaxed">
+              <p className="text-xs font-bold text-slate-700 dark:text-slate-300 leading-relaxed">
                 Anti broken-image pada hasil konversi PDF ke Word (DOCX). Semua objek grafis diekstrak sebagai PNG/JPEG sRGB utuh.
               </p>
             </div>
@@ -189,14 +194,14 @@ export const App: React.FC = () => {
             <div className="absolute top-0 left-4 bg-neo-pink text-black border-t-[3px] border-l-[3px] border-r-[3px] border-black rounded-t-xl px-4 py-1 text-xs font-black uppercase shadow-neo-sm">
               TAB #02
             </div>
-            <div className="bg-white border-[3px] border-black rounded-3xl p-6 shadow-neo-lg flex flex-col items-start h-full overflow-hidden">
-              <div className="w-12 h-12 bg-neo-pink border-2 border-black rounded-2xl flex items-center justify-center shadow-neo-sm mb-4">
+            <div className="bg-white dark:bg-[#1E1E1E] border-[3px] border-black dark:border-white rounded-3xl p-6 shadow-neo-lg dark:shadow-neo-dark flex flex-col items-start h-full overflow-hidden text-black dark:text-white">
+              <div className="w-12 h-12 bg-neo-pink border-2 border-black rounded-2xl flex items-center justify-center shadow-neo-sm mb-4 text-black">
                 <Wand2 className="w-6 h-6 stroke-[2.5]" />
               </div>
-              <h3 className="font-black text-lg text-black uppercase mb-1">
+              <h3 className="font-black text-lg uppercase mb-1">
                 Chroma & AI Eraser
               </h3>
-              <p className="text-xs font-bold text-slate-700 leading-relaxed">
+              <p className="text-xs font-bold text-slate-700 dark:text-slate-300 leading-relaxed">
                 Hapus background putih pada logo, vektor, dan siluet secara presisi, serta pisahkan foto objek dengan AI Cutout.
               </p>
             </div>
@@ -207,14 +212,14 @@ export const App: React.FC = () => {
             <div className="absolute top-0 left-4 bg-neo-yellow text-black border-t-[3px] border-l-[3px] border-r-[3px] border-black rounded-t-xl px-4 py-1 text-xs font-black uppercase shadow-neo-sm">
               TAB #03
             </div>
-            <div className="bg-white border-[3px] border-black rounded-3xl p-6 shadow-neo-lg flex flex-col items-start h-full overflow-hidden">
-              <div className="w-12 h-12 bg-neo-yellow border-2 border-black rounded-2xl flex items-center justify-center shadow-neo-sm mb-4">
+            <div className="bg-white dark:bg-[#1E1E1E] border-[3px] border-black dark:border-white rounded-3xl p-6 shadow-neo-lg dark:shadow-neo-dark flex flex-col items-start h-full overflow-hidden text-black dark:text-white">
+              <div className="w-12 h-12 bg-neo-yellow border-2 border-black rounded-2xl flex items-center justify-center shadow-neo-sm mb-4 text-black">
                 <Zap className="w-6 h-6 stroke-[2.5]" />
               </div>
-              <h3 className="font-black text-lg text-black uppercase mb-1">
+              <h3 className="font-black text-lg uppercase mb-1">
                 Batch & Paste Instant
               </h3>
-              <p className="text-xs font-bold text-slate-700 leading-relaxed">
+              <p className="text-xs font-bold text-slate-700 dark:text-slate-300 leading-relaxed">
                 Dukungan upload multi-file antrean sekaligus, paste gambar langsung via Ctrl + V, dan unduh paket arsip ZIP satu klik.
               </p>
             </div>
@@ -222,20 +227,23 @@ export const App: React.FC = () => {
 
         </div>
 
+        {/* Jaminan Keamanan & Trust FAQ Accordion */}
+        <TrustFaq />
+
       </main>
 
       {/* Footer Neo-Brutalist */}
-      <footer className="mt-auto border-t-[3px] border-black bg-white py-6 px-4">
-        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-black text-black">
+      <footer className="mt-auto border-t-[3px] border-black dark:border-white bg-white dark:bg-[#181818] py-6 px-4">
+        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-black text-black dark:text-white">
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 border border-black inline-block animate-ping" />
             <span>RPDF ENGINE PRO • PRIVACY-FIRST CONVERTER</span>
           </div>
           <div className="flex items-center gap-4">
-            <span className="bg-neo-yellow border border-black px-2.5 py-1 rounded-lg">
+            <span className="bg-neo-yellow text-black border border-black px-2.5 py-1 rounded-lg">
               CLEANUP 1-JAM OTOMATIS
             </span>
-            <span className="bg-white border border-black px-2.5 py-1 rounded-lg shadow-neo-sm font-black">
+            <span className="bg-white dark:bg-[#252525] border border-black dark:border-white px-2.5 py-1 rounded-lg shadow-neo-sm font-black">
               v1.5 RPDF PRO
             </span>
           </div>

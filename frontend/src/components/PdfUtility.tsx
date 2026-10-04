@@ -23,11 +23,14 @@ import {
   ShieldCheck,
   Check,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  Image as ImageIcon,
+  RotateCw
 } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import { PdfToolMode } from '../types';
 import { LoadingModal } from './LoadingModal';
+import { addRecentActivity } from '../utils/recentActivity';
 
 interface PdfUtilityProps {
   initialMode?: PdfToolMode;
@@ -69,6 +72,10 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
   const [pageRange, setPageRange] = useState<string>('1-end');
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
+
+  // Organize & Rotate inputs
+  const [deletePages, setDeletePages] = useState<string>('');
+  const [rotationAngle, setRotationAngle] = useState<number>(0);
   
   // Watermark inputs
   const [watermarkText, setWatermarkText] = useState<string>('CONFIDENTIAL');
@@ -131,7 +138,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
     setActiveMode(mode);
     setDownloadUrl(null);
     setCompressionStats(null);
-    if (mode !== 'merge' && files.length > 1) {
+    if (mode !== 'merge' && mode !== 'images-to-pdf' && files.length > 1) {
       setFiles([files[0]]);
     }
   };
@@ -145,6 +152,36 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
       color: 'bg-neo-blue',
       borderColor: 'border-blue-900',
       icon: <FileText className="w-4 h-4 stroke-[2.5]" />,
+      multiple: false
+    },
+    {
+      id: 'images-to-pdf',
+      name: 'Gambar ke PDF',
+      badge: 'MULTI-FOTO',
+      desc: 'Satukan banyak foto JPG, PNG, WebP jadi satu PDF rapi.',
+      color: 'bg-emerald-300',
+      borderColor: 'border-emerald-900',
+      icon: <ImageIcon className="w-4 h-4 stroke-[2.5]" />,
+      multiple: true
+    },
+    {
+      id: 'pdf-to-images',
+      name: 'PDF ke Gambar',
+      badge: '150 DPI',
+      desc: 'Render lembar PDF jadi gambar jernih (.ZIP/PNG).',
+      color: 'bg-teal-300',
+      borderColor: 'border-teal-900',
+      icon: <ImageIcon className="w-4 h-4 stroke-[2.5]" />,
+      multiple: false
+    },
+    {
+      id: 'organize',
+      name: 'Kelola & Putar',
+      badge: 'ORGANISIR',
+      desc: 'Hapus halaman tidak perlu & putar orientasi PDF (90°/180°).',
+      color: 'bg-indigo-300',
+      borderColor: 'border-indigo-900',
+      icon: <RotateCw className="w-4 h-4 stroke-[2.5]" />,
       multiple: false
     },
     {
@@ -171,7 +208,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
       id: 'compress',
       name: 'Kompres PDF',
       badge: 'HEMAT RUANG',
-      desc: 'Kecilkan ukuran dokumen tanpa merusak kualitas teks.',
+      desc: 'Kecilkan ukuran dokumen riil tanpa merusak teks.',
       color: 'bg-neo-purple',
       borderColor: 'border-purple-900',
       icon: <Minimize2 className="w-4 h-4 stroke-[2.5]" />,
@@ -192,8 +229,8 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
       name: 'Buka Kunci',
       badge: 'DEKRIPSI',
       desc: 'Hilangkan password dari dokumen PDF yang terkunci.',
-      color: 'bg-emerald-300',
-      borderColor: 'border-emerald-900',
+      color: 'bg-amber-300',
+      borderColor: 'border-amber-900',
       icon: <Unlock className="w-4 h-4 stroke-[2.5]" />,
       multiple: false
     },
@@ -225,14 +262,24 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
     const valid: File[] = [];
     for (let i = 0; i < incoming.length; i++) {
       const f = incoming[i];
-      if (!f.name.toLowerCase().endsWith('.pdf')) {
-        showToast(`File "${f.name}" bukan PDF. Modul ini hanya memproses dokumen .pdf.`, 'error');
-        continue;
-      }
       if (f.size > 25 * 1024 * 1024) {
-        showToast(`File "${f.name}" melebihi batas ukuran 25MB.`, 'error');
+        showToast('Ukuran berkas melebihi batas maksimal 25MB.', 'error');
         continue;
       }
+
+      if (activeMode === 'images-to-pdf') {
+        const isImg = f.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(f.name);
+        if (!isImg) {
+          showToast(`File "${f.name}" bukan gambar. Hanya menerima format JPG, PNG, dan WebP.`, 'error');
+          continue;
+        }
+      } else {
+        if (!f.name.toLowerCase().endsWith('.pdf')) {
+          showToast(`File "${f.name}" bukan PDF. Modul ini hanya memproses dokumen .pdf.`, 'error');
+          continue;
+        }
+      }
+
       valid.push(f);
     }
 
@@ -255,12 +302,19 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
     setFiles([]);
     setDownloadUrl(null);
     setCompressionStats(null);
+    setDeletePages('');
+    setRotationAngle(0);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const executeAction = async () => {
     if (files.length === 0) {
-      showToast('Silakan pilih atau unggah dokumen PDF terlebih dahulu.', 'error');
+      showToast(
+        activeMode === 'images-to-pdf'
+          ? 'Silakan pilih gambar (JPG/PNG/WebP) terlebih dahulu.'
+          : 'Silakan pilih dokumen PDF terlebih dahulu.',
+        'error'
+      );
       return;
     }
 
@@ -284,6 +338,23 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
       case 'to-docx':
         endpoint = '/api/pdf/to-docx';
         formData.append('file', files[0]);
+        break;
+
+      case 'images-to-pdf':
+        endpoint = '/api/pdf/images-to-pdf';
+        files.forEach(f => formData.append('files', f));
+        break;
+
+      case 'pdf-to-images':
+        endpoint = '/api/pdf/pdf-to-images';
+        formData.append('file', files[0]);
+        break;
+
+      case 'organize':
+        endpoint = '/api/pdf/organize';
+        formData.append('file', files[0]);
+        formData.append('delete_pages', deletePages);
+        formData.append('rotation', rotationAngle.toString());
         break;
 
       case 'split':
@@ -342,13 +413,22 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: 'Gagal memproses dokumen PDF' }));
-        throw new Error(err.detail || 'Gagal memproses dokumen PDF.');
+        throw new Error(err.detail || 'Gagal memproses dokumen.');
       }
 
       const data = await res.json();
-      setDownloadUrl(getApiUrl(data.download_url));
+      const finalDownloadUrl = getApiUrl(data.download_url);
+      setDownloadUrl(finalDownloadUrl);
       setDownloadName(data.download_name || 'document.pdf');
-      showToast(data.message || 'Pemrosesan dokumen PDF berhasil!', 'success');
+      showToast(data.message || 'Pemrosesan berhasil!', 'success');
+
+      // Simpan riwayat unduhan lokal
+      addRecentActivity({
+        fileName: data.download_name || files[0]?.name || 'document.pdf',
+        operation: currentTool.name,
+        downloadUrl: finalDownloadUrl,
+        fileSize: files[0]?.size
+      });
 
       if (activeMode === 'compress') {
         const orig = data.original_size || files[0]?.size || 1024;
@@ -414,30 +494,30 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
       {/* Tool Navigation Bar (Neo-Brutalist Grid Buttons) */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-3 px-1">
-          <div className="flex items-center gap-2 text-xs font-black uppercase text-black">
+          <div className="flex items-center gap-2 text-xs font-black uppercase text-black dark:text-white">
             <Sparkles className="w-4 h-4 text-amber-500 fill-amber-500" />
             <span>PILIH MODUL ALAT PDF</span>
           </div>
-          <span className="text-xs font-bold text-slate-600 bg-white border border-black px-2 py-0.5 rounded-md shadow-neo-sm">
-            8 FITUR LENGKAP
+          <span className="text-xs font-bold text-slate-600 dark:text-slate-300 bg-white dark:bg-[#1E1E1E] border border-black dark:border-white px-2.5 py-0.5 rounded-md shadow-neo-sm">
+            11 FITUR LENGKAP
           </span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-2.5 sm:gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-3">
           {tools.map(tool => {
             const isSelected = activeMode === tool.id;
             return (
               <button
                 key={tool.id}
                 onClick={() => handleModeSwitch(tool.id)}
-                className={`p-3 border-2 border-black rounded-2xl text-left transition-all flex flex-col justify-between gap-2 cursor-pointer ${
+                className={`p-3 border-2 border-black dark:border-white rounded-2xl text-left transition-all flex flex-col justify-between gap-2 cursor-pointer ${
                   isSelected
-                    ? `${tool.color} shadow-neo translate-x-[-1px] translate-y-[-1px] ring-2 ring-black`
-                    : 'bg-white hover:bg-slate-100 shadow-neo-sm hover:shadow-neo'
+                    ? `${tool.color} text-black shadow-neo dark:shadow-neo-dark translate-x-[-1px] translate-y-[-1px] ring-2 ring-black dark:ring-white`
+                    : 'bg-white dark:bg-[#1E1E1E] text-black dark:text-white hover:bg-slate-100 dark:hover:bg-[#252525] shadow-neo-sm hover:shadow-neo'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <div className="w-7 h-7 bg-white border border-black rounded-lg flex items-center justify-center shadow-neo-sm">
+                  <div className="w-7 h-7 bg-white dark:bg-[#2c2c2c] border border-black dark:border-white rounded-lg flex items-center justify-center shadow-neo-sm text-black dark:text-white">
                     {tool.icon}
                   </div>
                   <span className="text-[10px] font-black uppercase tracking-wider bg-black text-white px-1.5 py-0.5 rounded">
@@ -445,11 +525,11 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                   </span>
                 </div>
                 <div>
-                  <h4 className="text-xs sm:text-sm font-black text-black leading-tight">
+                  <h4 className="text-xs sm:text-sm font-black leading-tight">
                     {tool.name}
                   </h4>
-                  <p className="text-[11px] font-bold text-slate-700 truncate mt-0.5">
-                    {tool.id === 'to-docx' ? '.docx editable' : tool.id === 'split' ? 'Range halaman' : tool.id === 'protect' ? 'AES-128 enkripsi' : tool.id === 'unlock' ? 'Buka password' : tool.id === 'watermark' ? 'Cap transparan' : tool.id === 'page-numbers' ? 'Otomatis' : tool.id === 'merge' ? 'Multi dokumen' : 'Kompresi ringan'}
+                  <p className="text-[11px] font-bold text-slate-700 dark:text-slate-300 truncate mt-0.5">
+                    {tool.desc}
                   </p>
                 </div>
               </button>
@@ -459,7 +539,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
       </div>
 
       {/* Main Container Card */}
-      <div className="bg-white border-[3px] border-black rounded-3xl shadow-neo-lg p-6 sm:p-10 relative overflow-hidden">
+      <div className="bg-white dark:bg-[#1E1E1E] border-[3px] border-black dark:border-white rounded-3xl shadow-neo-lg dark:shadow-neo-dark p-6 sm:p-10 relative overflow-hidden">
         
         {/* Tool Header */}
         <div className="text-center mb-8">
@@ -467,10 +547,10 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
             {currentTool.icon}
             <span>MODUL {currentTool.name}</span>
           </div>
-          <h2 className="text-2xl sm:text-4xl font-black tracking-tight text-black uppercase">
+          <h2 className="text-2xl sm:text-4xl font-black tracking-tight text-black dark:text-white uppercase">
             {currentTool.name}
           </h2>
-          <p className="mt-2 text-xs sm:text-sm font-bold text-slate-700 max-w-xl mx-auto">
+          <p className="mt-2 text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-300 max-w-xl mx-auto">
             {currentTool.desc}
           </p>
         </div>
@@ -478,14 +558,95 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
         {/* Dynamic Tool Specific Configuration / Inputs */}
         <div className="mb-6">
 
+          {/* Mode: Images to PDF Info Badge */}
+          {activeMode === 'images-to-pdf' && (
+            <div className="bg-emerald-50 dark:bg-emerald-950/30 border-2 border-black dark:border-white rounded-2xl p-4 shadow-neo-sm flex items-start gap-3 text-black dark:text-white">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 stroke-[2.5] flex-shrink-0 mt-0.5" />
+              <div className="text-xs">
+                <p className="font-black uppercase tracking-wide">Multi-Foto ke PDF Auto-Fit</p>
+                <p className="font-bold text-slate-700 dark:text-slate-300 mt-0.5 leading-relaxed">
+                  Unggah banyak foto sekaligus (JPG, PNG, WebP). Gunakan tombol panah ↑ ↓ di daftar berkas untuk mengatur urutan halaman sebelum digabungkan menjadi dokumen PDF.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Mode: PDF to Images Info Badge */}
+          {activeMode === 'pdf-to-images' && (
+            <div className="bg-teal-50 dark:bg-teal-950/30 border-2 border-black dark:border-white rounded-2xl p-4 shadow-neo-sm flex items-start gap-3 text-black dark:text-white">
+              <Sparkles className="w-5 h-5 text-teal-600 stroke-[2.5] flex-shrink-0 mt-0.5" />
+              <div className="text-xs">
+                <p className="font-black uppercase tracking-wide">Raster Rendering PyMuPDF (150 DPI)</p>
+                <p className="font-bold text-slate-700 dark:text-slate-300 mt-0.5 leading-relaxed">
+                  Mengonversi setiap lembar halaman PDF menjadi file gambar beresolusi tinggi. Dokumen multi-halaman akan otomatis dikemas ke dalam berkas arsip .ZIP.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Mode: Organize & Rotate PDF Controls */}
+          {activeMode === 'organize' && (
+            <div className="bg-[#EEF2FF] dark:bg-[#1f2338] border-2 border-black dark:border-white rounded-2xl p-4 sm:p-5 shadow-neo-sm space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Hapus Halaman */}
+                <div>
+                  <label className="block text-xs font-black uppercase tracking-wider text-black dark:text-white mb-2">
+                    Hapus Halaman Tertentu (Nomor Halaman):
+                  </label>
+                  <input
+                    type="text"
+                    value={deletePages}
+                    onChange={e => setDeletePages(e.target.value)}
+                    placeholder="Contoh: 2, 4 (atau kosongkan)"
+                    className="w-full bg-white dark:bg-[#252525] border-2 border-black dark:border-white rounded-xl px-4 py-2.5 text-sm font-black text-black dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-neo-sm"
+                  />
+                  <p className="text-[11px] font-bold text-slate-600 dark:text-slate-400 mt-1.5">
+                    Masukkan nomor halaman yang ingin dibuang dipisahkan tanda koma.
+                  </p>
+                </div>
+
+                {/* Putar Orientasi */}
+                <div>
+                  <label className="block text-xs font-black uppercase tracking-wider text-black dark:text-white mb-2">
+                    Putar Sudut Orientasi Halaman:
+                  </label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {[
+                      { angle: 0, label: '0° Normal' },
+                      { angle: 90, label: '+90° Kanan' },
+                      { angle: 180, label: '180° Balik' },
+                      { angle: 270, label: '+270° Kiri' }
+                    ].map(opt => (
+                      <button
+                        key={opt.angle}
+                        type="button"
+                        onClick={() => setRotationAngle(opt.angle)}
+                        className={`p-2 border-2 border-black dark:border-white rounded-xl text-center text-xs font-black transition-all cursor-pointer ${
+                          rotationAngle === opt.angle
+                            ? 'bg-neo-yellow text-black shadow-neo-sm ring-2 ring-black dark:ring-white'
+                            : 'bg-white dark:bg-[#252525] text-black dark:text-white hover:bg-slate-100 dark:hover:bg-[#333]'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] font-bold text-slate-600 dark:text-slate-400 mt-1.5">
+                    Memutar seluruh lembar halaman PDF searah jarum jam.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Mode: Compress PDF Preset Selector */}
           {activeMode === 'compress' && (
-            <div className="bg-[#FAF5FF] border-2 border-black rounded-2xl p-4 sm:p-5 shadow-neo-sm mb-4">
+            <div className="bg-[#FAF5FF] dark:bg-[#241c30] border-2 border-black dark:border-white rounded-2xl p-4 sm:p-5 shadow-neo-sm mb-4">
               <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                <label className="block text-xs font-black uppercase tracking-wider text-black">
+                <label className="block text-xs font-black uppercase tracking-wider text-black dark:text-white">
                   PILIH TINGKAT KOMPRESI:
                 </label>
-                <span className="text-[10px] font-black uppercase bg-purple-200 border border-purple-900 px-2 py-0.5 rounded shadow-neo-sm">
+                <span className="text-[10px] font-black uppercase bg-purple-200 border border-purple-900 px-2 py-0.5 rounded shadow-neo-sm text-black">
                   PyMuPDF Real Engine
                 </span>
               </div>
@@ -495,10 +656,10 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                 <button
                   type="button"
                   onClick={() => setCompressionLevel('recommended')}
-                  className={`p-3.5 border-2 border-black rounded-xl text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                  className={`p-3.5 border-2 border-black dark:border-white rounded-xl text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
                     compressionLevel === 'recommended'
-                      ? 'bg-neo-yellow shadow-neo ring-2 ring-black translate-x-[-1px] translate-y-[-1px]'
-                      : 'bg-white hover:bg-slate-50 shadow-neo-sm'
+                      ? 'bg-neo-yellow text-black shadow-neo ring-2 ring-black translate-x-[-1px] translate-y-[-1px]'
+                      : 'bg-white dark:bg-[#252525] text-black dark:text-white hover:bg-slate-50 dark:hover:bg-[#333] shadow-neo-sm'
                   }`}
                 >
                   <div className="flex items-center justify-between">
@@ -506,13 +667,13 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                       <span className={`w-4 h-4 rounded-full border-2 border-black flex items-center justify-center ${compressionLevel === 'recommended' ? 'bg-black' : 'bg-white'}`}>
                         {compressionLevel === 'recommended' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
                       </span>
-                      <span className="font-black text-xs sm:text-sm text-black">Rekomendasi</span>
+                      <span className="font-black text-xs sm:text-sm">Rekomendasi</span>
                     </div>
-                    <span className="text-[10px] font-black bg-white border border-black px-1.5 py-0.5 rounded shadow-neo-sm">
+                    <span className="text-[10px] font-black bg-white border border-black px-1.5 py-0.5 rounded shadow-neo-sm text-black">
                       STANDAR SEIMBANG
                     </span>
                   </div>
-                  <p className="text-[11px] font-bold text-slate-700 leading-snug">
+                  <p className="text-[11px] font-bold text-slate-700 dark:text-slate-300 leading-snug">
                     Kualitas seimbang, teks & gambar tetap tajam. Reduksi ukuran ~40-60%. Cocok untuk dokumen kantor & arsip.
                   </p>
                 </button>
@@ -521,10 +682,10 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                 <button
                   type="button"
                   onClick={() => setCompressionLevel('extreme')}
-                  className={`p-3.5 border-2 border-black rounded-xl text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                  className={`p-3.5 border-2 border-black dark:border-white rounded-xl text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
                     compressionLevel === 'extreme'
-                      ? 'bg-neo-pink shadow-neo ring-2 ring-black translate-x-[-1px] translate-y-[-1px]'
-                      : 'bg-white hover:bg-slate-50 shadow-neo-sm'
+                      ? 'bg-neo-pink text-black shadow-neo ring-2 ring-black translate-x-[-1px] translate-y-[-1px]'
+                      : 'bg-white dark:bg-[#252525] text-black dark:text-white hover:bg-slate-50 dark:hover:bg-[#333] shadow-neo-sm'
                   }`}
                 >
                   <div className="flex items-center justify-between">
@@ -532,13 +693,13 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                       <span className={`w-4 h-4 rounded-full border-2 border-black flex items-center justify-center ${compressionLevel === 'extreme' ? 'bg-black' : 'bg-white'}`}>
                         {compressionLevel === 'extreme' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
                       </span>
-                      <span className="font-black text-xs sm:text-sm text-black">Ekstrem</span>
+                      <span className="font-black text-xs sm:text-sm">Ekstrem</span>
                     </div>
                     <span className="text-[10px] font-black bg-black text-white px-1.5 py-0.5 rounded shadow-neo-sm">
                       SUPER KECIL
                     </span>
                   </div>
-                  <p className="text-[11px] font-bold text-slate-700 leading-snug">
+                  <p className="text-[11px] font-bold text-slate-700 dark:text-slate-300 leading-snug">
                     Kompresi maksimal, gambar dioptimalkan drastis. Cocok untuk Berkas CPNS, BKN, & Pendaftaran Online (maks. 200-500KB).
                   </p>
                 </button>
@@ -548,11 +709,11 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
 
           {/* Mode 1: PDF to Word Info Badge */}
           {activeMode === 'to-docx' && (
-            <div className="bg-blue-50 border-2 border-black rounded-2xl p-4 shadow-neo-sm flex items-start gap-3 text-black">
+            <div className="bg-blue-50 dark:bg-blue-950/30 border-2 border-black dark:border-white rounded-2xl p-4 shadow-neo-sm flex items-start gap-3 text-black dark:text-white">
               <ShieldCheck className="w-5 h-5 text-blue-700 stroke-[2.5] flex-shrink-0 mt-0.5" />
               <div className="text-xs">
                 <p className="font-black uppercase tracking-wide">Google Docs & Microsoft Word Ready</p>
-                <p className="font-bold text-slate-700 mt-0.5 leading-relaxed">
+                <p className="font-bold text-slate-700 dark:text-slate-300 mt-0.5 leading-relaxed">
                   Menghasilkan file .docx dengan tata letak paragraf terstruktur dan gambar sRGB tanpa broken-image saat dibuka di Google Dokumen.
                 </p>
               </div>
@@ -561,8 +722,8 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
 
           {/* Mode 2: Split PDF Page Range Input */}
           {activeMode === 'split' && (
-            <div className="bg-[#FFFDF5] border-2 border-black rounded-2xl p-4 sm:p-5 shadow-neo-sm">
-              <label className="block text-xs font-black uppercase tracking-wider text-black mb-2">
+            <div className="bg-[#FFFDF5] dark:bg-[#25221b] border-2 border-black dark:border-white rounded-2xl p-4 sm:p-5 shadow-neo-sm">
+              <label className="block text-xs font-black uppercase tracking-wider text-black dark:text-white mb-2">
                 Tentukan Rentang / Nomor Halaman Yang Ingin Diekstrak:
               </label>
               <div className="flex flex-col sm:flex-row gap-3">
@@ -571,42 +732,42 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                   value={pageRange}
                   onChange={e => setPageRange(e.target.value)}
                   placeholder="Contoh: 1-3, 5, 8-10"
-                  className="flex-1 bg-white border-2 border-black rounded-xl px-4 py-2.5 text-sm font-black text-black placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-neo-yellow shadow-neo-sm"
+                  className="flex-1 bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-xl px-4 py-2.5 text-sm font-black text-black dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-neo-yellow shadow-neo-sm"
                 />
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setPageRange('1-end')}
-                    className="px-3 py-2 bg-neo-yellow border-2 border-black rounded-xl text-xs font-black shadow-neo-sm hover:bg-yellow-300 transition"
+                    className="px-3 py-2 bg-neo-yellow border-2 border-black rounded-xl text-xs font-black text-black shadow-neo-sm hover:bg-yellow-300 transition"
                   >
                     Semua (1-end)
                   </button>
                   <button
                     type="button"
                     onClick={() => setPageRange('1')}
-                    className="px-3 py-2 bg-white border-2 border-black rounded-xl text-xs font-black shadow-neo-sm hover:bg-slate-100 transition"
+                    className="px-3 py-2 bg-white dark:bg-[#2c2c2c] border-2 border-black dark:border-white rounded-xl text-xs font-black text-black dark:text-white shadow-neo-sm hover:bg-slate-100 transition"
                   >
                     Hal. 1
                   </button>
                   <button
                     type="button"
                     onClick={() => setPageRange('1-5')}
-                    className="px-3 py-2 bg-white border-2 border-black rounded-xl text-xs font-black shadow-neo-sm hover:bg-slate-100 transition"
+                    className="px-3 py-2 bg-white dark:bg-[#2c2c2c] border-2 border-black dark:border-white rounded-xl text-xs font-black text-black dark:text-white shadow-neo-sm hover:bg-slate-100 transition"
                   >
                     1 - 5
                   </button>
                 </div>
               </div>
-              <p className="text-[11px] font-bold text-slate-600 mt-2">
-                Format: Pisahkan dengan tanda koma (,) untuk halaman acak atau tanda hubung (-) untuk rentang (contoh: <code className="bg-white border border-black px-1 rounded">1-4, 7</code>).
+              <p className="text-[11px] font-bold text-slate-600 dark:text-slate-400 mt-2">
+                Format: Pisahkan dengan tanda koma (,) untuk halaman acak atau tanda hubung (-) untuk rentang (contoh: <code className="bg-white dark:bg-[#333] border border-black dark:border-white px-1 rounded">1-4, 7</code>).
               </p>
             </div>
           )}
 
           {/* Mode 3: Protect PDF (Password Input) */}
           {activeMode === 'protect' && (
-            <div className="bg-pink-50 border-2 border-black rounded-2xl p-4 sm:p-5 shadow-neo-sm">
-              <label className="block text-xs font-black uppercase tracking-wider text-black mb-2">
+            <div className="bg-pink-50 dark:bg-pink-950/30 border-2 border-black dark:border-white rounded-2xl p-4 sm:p-5 shadow-neo-sm">
+              <label className="block text-xs font-black uppercase tracking-wider text-black dark:text-white mb-2">
                 Masukkan Kata Sandi (Password) Penguncian Dokumen:
               </label>
               <div className="relative max-w-md">
@@ -615,26 +776,26 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="Ketik password baru..."
-                  className="w-full bg-white border-2 border-black rounded-xl px-4 py-2.5 pr-12 text-sm font-black text-black placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-neo-pink shadow-neo-sm"
+                  className="w-full bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-xl px-4 py-2.5 pr-12 text-sm font-black text-black dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-neo-pink shadow-neo-sm"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-700 hover:text-black"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-700 dark:text-slate-300 hover:text-black dark:hover:text-white"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4 stroke-[2.5]" /> : <Eye className="w-4 h-4 stroke-[2.5]" />}
                 </button>
               </div>
-              <p className="text-[11px] font-bold text-slate-600 mt-2">
-                Dokumen akan dienkripsi dengan standar AES 128-bit. Pastikan Anda mengingat password ini karena tidak ada opsi pemulihan.
+              <p className="text-[11px] font-bold text-slate-600 dark:text-slate-400 mt-2">
+                Dokumen akan dienkripsi dengan standar pypdf modern. Pastikan Anda mengingat password ini karena tidak ada opsi pemulihan.
               </p>
             </div>
           )}
 
           {/* Mode 4: Unlock PDF (Password Input) */}
           {activeMode === 'unlock' && (
-            <div className="bg-emerald-50 border-2 border-black rounded-2xl p-4 sm:p-5 shadow-neo-sm">
-              <label className="block text-xs font-black uppercase tracking-wider text-black mb-2">
+            <div className="bg-emerald-50 dark:bg-emerald-950/30 border-2 border-black dark:border-white rounded-2xl p-4 sm:p-5 shadow-neo-sm">
+              <label className="block text-xs font-black uppercase tracking-wider text-black dark:text-white mb-2">
                 Masukkan Kata Sandi Dokumen PDF Saat Ini:
               </label>
               <div className="relative max-w-md">
@@ -643,17 +804,17 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="Ketik password pembuka..."
-                  className="w-full bg-white border-2 border-black rounded-xl px-4 py-2.5 pr-12 text-sm font-black text-black placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-neo-green shadow-neo-sm"
+                  className="w-full bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-xl px-4 py-2.5 pr-12 text-sm font-black text-black dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-neo-green shadow-neo-sm"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-700 hover:text-black"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-700 dark:text-slate-300 hover:text-black dark:hover:text-white"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4 stroke-[2.5]" /> : <Eye className="w-4 h-4 stroke-[2.5]" />}
                 </button>
               </div>
-              <p className="text-[11px] font-bold text-slate-600 mt-2">
+              <p className="text-[11px] font-bold text-slate-600 dark:text-slate-400 mt-2">
                 Setelah proteksi dibuka, PDF dapat dibaca, diedit, dan dicetak tanpa perlu memasukkan password lagi.
               </p>
             </div>
@@ -661,12 +822,12 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
 
           {/* Mode 5: Watermark Inputs */}
           {activeMode === 'watermark' && (
-            <div className="bg-amber-50 border-2 border-black rounded-2xl p-4 sm:p-5 shadow-neo-sm space-y-4">
+            <div className="bg-amber-50 dark:bg-amber-950/30 border-2 border-black dark:border-white rounded-2xl p-4 sm:p-5 shadow-neo-sm space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 
                 {/* Teks Watermark */}
                 <div>
-                  <label className="block text-xs font-black uppercase tracking-wider text-black mb-2">
+                  <label className="block text-xs font-black uppercase tracking-wider text-black dark:text-white mb-2">
                     Teks Cap Watermark:
                   </label>
                   <input
@@ -674,7 +835,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                     value={watermarkText}
                     onChange={e => setWatermarkText(e.target.value)}
                     placeholder="Contoh: CONFIDENTIAL / RAHASIA"
-                    className="w-full bg-white border-2 border-black rounded-xl px-4 py-2 text-sm font-black text-black shadow-neo-sm focus:outline-none focus:ring-2 focus:ring-neo-yellow"
+                    className="w-full bg-white dark:bg-[#1E1E1E] border-2 border-black dark:border-white rounded-xl px-4 py-2 text-sm font-black text-black dark:text-white shadow-neo-sm focus:outline-none focus:ring-2 focus:ring-neo-yellow"
                   />
                   <div className="flex flex-wrap gap-1.5 mt-2">
                     {['CONFIDENTIAL', 'DRAFT', 'SALINAN RESMI', 'TOP SECRET'].map(preset => (
@@ -682,7 +843,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                         key={preset}
                         type="button"
                         onClick={() => setWatermarkText(preset)}
-                        className="text-[10px] font-black bg-white border border-black px-2 py-0.5 rounded shadow-neo-sm hover:bg-neo-yellow"
+                        className="text-[10px] font-black bg-white dark:bg-[#2c2c2c] text-black dark:text-white border border-black dark:border-white px-2 py-0.5 rounded shadow-neo-sm hover:bg-neo-yellow hover:text-black"
                       >
                         {preset}
                       </button>
@@ -693,7 +854,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                 {/* Pengaturan Visual Watermark */}
                 <div className="space-y-3">
                   <div>
-                    <div className="flex items-center justify-between text-xs font-black uppercase text-black mb-1">
+                    <div className="flex items-center justify-between text-xs font-black uppercase text-black dark:text-white mb-1">
                       <span>Transparansi (Opacity):</span>
                       <span className="font-mono">{Math.round(watermarkOpacity * 100)}%</span>
                     </div>
@@ -709,7 +870,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                   </div>
 
                   <div>
-                    <div className="flex items-center justify-between text-xs font-black uppercase text-black mb-1">
+                    <div className="flex items-center justify-between text-xs font-black uppercase text-black dark:text-white mb-1">
                       <span>Sudut Putar (Rotasi):</span>
                       <span className="font-mono">{watermarkRotation}°</span>
                     </div>
@@ -726,7 +887,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
 
                   {/* Warna Cap Watermark */}
                   <div>
-                    <span className="block text-xs font-black uppercase text-black mb-1.5">
+                    <span className="block text-xs font-black uppercase text-black dark:text-white mb-1.5">
                       Pilihan Warna:
                     </span>
                     <div className="flex items-center gap-2">
@@ -759,18 +920,18 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
 
           {/* Mode 6: Page Numbers Inputs */}
           {activeMode === 'page-numbers' && (
-            <div className="bg-sky-50 border-2 border-black rounded-2xl p-4 sm:p-5 shadow-neo-sm space-y-4">
+            <div className="bg-sky-50 dark:bg-sky-950/30 border-2 border-black dark:border-white rounded-2xl p-4 sm:p-5 shadow-neo-sm space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 
                 {/* Posisi Nomor */}
                 <div>
-                  <label className="block text-xs font-black uppercase tracking-wider text-black mb-2">
+                  <label className="block text-xs font-black uppercase tracking-wider text-black dark:text-white mb-2">
                     Posisi Nomor Halaman:
                   </label>
                   <select
                     value={pageNumberPosition}
                     onChange={e => setPageNumberPosition(e.target.value)}
-                    className="w-full bg-white border-2 border-black rounded-xl px-3 py-2 text-xs font-black text-black shadow-neo-sm focus:outline-none"
+                    className="w-full bg-white dark:bg-[#252525] border-2 border-black dark:border-white rounded-xl px-3 py-2 text-xs font-black text-black dark:text-white shadow-neo-sm focus:outline-none"
                   >
                     <option value="bottom-center">Bawah Tengah (Rekomendasi)</option>
                     <option value="bottom-right">Bawah Kanan</option>
@@ -781,7 +942,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
 
                 {/* Format Template */}
                 <div>
-                  <label className="block text-xs font-black uppercase tracking-wider text-black mb-2">
+                  <label className="block text-xs font-black uppercase tracking-wider text-black dark:text-white mb-2">
                     Format Teks:
                   </label>
                   <input
@@ -789,20 +950,20 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                     value={pageNumberFormat}
                     onChange={e => setPageNumberFormat(e.target.value)}
                     placeholder="Halaman {n} dari {total}"
-                    className="w-full bg-white border-2 border-black rounded-xl px-3 py-2 text-xs font-black text-black shadow-neo-sm focus:outline-none"
+                    className="w-full bg-white dark:bg-[#252525] border-2 border-black dark:border-white rounded-xl px-3 py-2 text-xs font-black text-black dark:text-white shadow-neo-sm focus:outline-none"
                   />
                   <div className="flex gap-1.5 mt-2">
                     <button
                       type="button"
                       onClick={() => setPageNumberFormat('{n} / {total}')}
-                      className="text-[10px] font-black bg-white border border-black px-2 py-0.5 rounded hover:bg-neo-yellow"
+                      className="text-[10px] font-black bg-white dark:bg-[#333] border border-black dark:border-white text-black dark:text-white px-2 py-0.5 rounded hover:bg-neo-yellow hover:text-black"
                     >
                       {'{n} / {total}'}
                     </button>
                     <button
                       type="button"
                       onClick={() => setPageNumberFormat('Hal. {n}')}
-                      className="text-[10px] font-black bg-white border border-black px-2 py-0.5 rounded hover:bg-neo-yellow"
+                      className="text-[10px] font-black bg-white dark:bg-[#333] border border-black dark:border-white text-black dark:text-white px-2 py-0.5 rounded hover:bg-neo-yellow hover:text-black"
                     >
                       Hal. {'{n}'}
                     </button>
@@ -811,7 +972,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
 
                 {/* Angka Awal */}
                 <div>
-                  <label className="block text-xs font-black uppercase tracking-wider text-black mb-2">
+                  <label className="block text-xs font-black uppercase tracking-wider text-black dark:text-white mb-2">
                     Mulai Dari Angka:
                   </label>
                   <input
@@ -819,7 +980,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                     min="1"
                     value={pageNumberStart}
                     onChange={e => setPageNumberStart(parseInt(e.target.value, 10) || 1)}
-                    className="w-full bg-white border-2 border-black rounded-xl px-3 py-2 text-xs font-black text-black shadow-neo-sm focus:outline-none"
+                    className="w-full bg-white dark:bg-[#252525] border-2 border-black dark:border-white rounded-xl px-3 py-2 text-xs font-black text-black dark:text-white shadow-neo-sm focus:outline-none"
                   />
                 </div>
 
@@ -838,19 +999,25 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
           className={`border-dashed rounded-2xl p-8 sm:p-12 text-center cursor-pointer transition-all duration-200 ${
             isDragging
               ? 'bg-neo-yellow border-4 border-black scale-[1.02] shadow-neo-lg ring-4 ring-black/10'
-              : 'bg-[#FFFDF8] hover:bg-slate-50 border-[3px] border-black'
+              : 'bg-[#FFFDF8] dark:bg-[#252525] hover:bg-slate-50 dark:hover:bg-[#2b2b2b] border-[3px] border-black dark:border-white'
           }`}
         >
           <div className={`w-16 h-16 mx-auto mb-4 ${currentTool.color} border-2 border-black rounded-2xl flex items-center justify-center shadow-neo-sm ${isDragging ? 'animate-bounce' : ''}`}>
             <UploadCloud className="w-8 h-8 text-black stroke-[2.5]" />
           </div>
-          <p className="text-sm sm:text-base font-black text-black">
-            {isDragging ? 'LEPAS FILE PDF DI SINI SEKARANG!' : (
-              <>Tarik & Lepas file PDF ke sini, atau <span className="bg-neo-yellow px-2.5 py-1 border border-black rounded-lg underline">Pilih Dokumen PDF</span></>
+          <p className="text-sm sm:text-base font-black text-black dark:text-white">
+            {isDragging ? 'LEPAS FILE DI SINI SEKARANG!' : (
+              activeMode === 'images-to-pdf' ? (
+                <>Tarik & Lepas gambar (JPG, PNG, WebP) ke sini, atau <span className="bg-neo-yellow text-black px-2.5 py-1 border border-black rounded-lg underline">Pilih Gambar</span></>
+              ) : (
+                <>Tarik & Lepas file PDF ke sini, atau <span className="bg-neo-yellow text-black px-2.5 py-1 border border-black rounded-lg underline">Pilih Dokumen PDF</span></>
+              )
             )}
           </p>
-          <p className="mt-2 text-xs font-bold text-slate-600">
-            {currentTool.multiple
+          <p className="mt-2 text-xs font-bold text-slate-600 dark:text-slate-300">
+            {activeMode === 'images-to-pdf'
+              ? 'Unggah 1 atau lebih foto untuk digabung menjadi PDF (Maks. 25MB per file)'
+              : currentTool.multiple
               ? 'Unggah minimal 2 file PDF untuk digabungkan (Maks. 25MB per file)'
               : 'Unggah 1 file dokumen PDF (Maks. 25MB)'}
           </p>
@@ -860,58 +1027,74 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
             multiple={currentTool.multiple}
             className="hidden"
             onChange={e => e.target.files && handleFiles(e.target.files)}
-            accept=".pdf"
+            accept={activeMode === 'images-to-pdf' ? '.png,.jpg,.jpeg,.webp,image/*' : '.pdf'}
           />
         </div>
 
         {/* Files Selected List */}
         {files.length > 0 && (
           <div className="mt-8">
-            <div className="flex items-center justify-between mb-3 text-xs font-black uppercase text-black flex-wrap gap-2">
+            <div className="flex items-center justify-between mb-3 text-xs font-black uppercase text-black dark:text-white flex-wrap gap-2">
               <div className="flex items-center gap-2">
-                <span>{currentTool.multiple ? `Daftar Dokumen PDF (${files.length})` : 'Dokumen PDF Terpilih'}</span>
-                {activeMode === 'merge' && files.length > 1 && (
-                  <span className="hidden sm:inline bg-neo-yellow border border-black px-2.5 py-0.5 rounded-lg text-[10px] font-black lowercase text-black shadow-neo-sm">
-                    ↑ ↓ atur urutan gabung
+                <span>
+                  {activeMode === 'images-to-pdf'
+                    ? `Daftar Gambar (${files.length})`
+                    : currentTool.multiple
+                    ? `Daftar Dokumen PDF (${files.length})`
+                    : 'Dokumen Terpilih'}
+                </span>
+                {(activeMode === 'merge' || activeMode === 'images-to-pdf') && files.length > 1 && (
+                  <span className="hidden sm:inline bg-neo-yellow text-black border border-black px-2.5 py-0.5 rounded-lg text-[10px] font-black lowercase shadow-neo-sm">
+                    ↑ ↓ atur urutan halaman
                   </span>
                 )}
               </div>
               <button
                 onClick={clearAll}
                 disabled={isProcessing}
-                className="text-rose-600 hover:underline flex items-center gap-1 cursor-pointer font-black"
+                className="text-rose-600 dark:text-rose-400 hover:underline flex items-center gap-1 cursor-pointer font-black"
               >
                 <RotateCcw className="w-3.5 h-3.5 stroke-[2.5]" />
                 <span>Reset</span>
               </button>
             </div>
 
-            <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+            <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
               {files.map((file, idx) => (
                 <div
                   key={`${file.name}-${idx}`}
-                  className="bg-white border-2 border-black rounded-2xl p-4 flex items-center justify-between gap-4 shadow-neo-sm"
+                  className="bg-white dark:bg-[#252525] border-2 border-black dark:border-white rounded-2xl p-4 flex items-center justify-between gap-4 shadow-neo-sm"
                 >
                   <div className="flex items-center gap-3.5 overflow-hidden flex-1">
-                    <div className="w-12 h-12 bg-neo-yellow border-2 border-black rounded-xl flex items-center justify-center flex-shrink-0 shadow-neo-sm">
-                      <FileText className="w-6 h-6 text-black stroke-[2.5]" />
-                    </div>
+                    {activeMode === 'images-to-pdf' ? (
+                      <div className="w-12 h-12 rounded-xl border-2 border-black dark:border-white overflow-hidden flex-shrink-0 shadow-neo-sm bg-slate-100">
+                        <img
+                          src={URL.createObjectURL(file)}
+                          alt={file.name}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-12 h-12 bg-neo-yellow border-2 border-black rounded-xl flex items-center justify-center flex-shrink-0 shadow-neo-sm">
+                        <FileText className="w-6 h-6 text-black stroke-[2.5]" />
+                      </div>
+                    )}
                     <div className="truncate">
                       <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 text-[10px] font-black uppercase bg-neo-yellow border border-black rounded-md shadow-neo-sm">
-                          .PDF
+                        <span className="px-2 py-0.5 text-[10px] font-black uppercase bg-neo-yellow border border-black rounded-md shadow-neo-sm text-black">
+                          {activeMode === 'images-to-pdf' ? 'IMG' : '.PDF'}
                         </span>
-                        <p className="text-sm font-black text-black truncate" title={file.name}>
+                        <p className="text-sm font-black text-black dark:text-white truncate" title={file.name}>
                           {currentTool.multiple && (
-                            <span className="bg-neo-blue border border-black rounded-md px-1.5 py-0.5 mr-1.5 font-mono text-[11px]">
+                            <span className="bg-neo-blue border border-black rounded-md px-1.5 py-0.5 mr-1.5 font-mono text-[11px] text-black">
                               #{idx + 1}
                             </span>
                           )}
                           {file.name}
                         </p>
                       </div>
-                      <div className="flex items-center gap-2 mt-1 text-xs font-bold text-slate-600">
-                        <span className="font-mono text-black font-black">{formatFileSize(file.size)}</span>
+                      <div className="flex items-center gap-2 mt-1 text-xs font-bold text-slate-600 dark:text-slate-300">
+                        <span className="font-mono text-black dark:text-white font-black">{formatFileSize(file.size)}</span>
                         <span>•</span>
                         <span className="text-emerald-700 bg-emerald-100 border border-emerald-800 px-1.5 py-0.2 rounded text-[10px] font-black">
                           SIAP DIPROSES
@@ -921,26 +1104,26 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                   </div>
 
                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {/* Reorder Buttons (Panah Atas / Bawah untuk Mode Merge) */}
-                    {activeMode === 'merge' && files.length > 1 && (
-                      <div className="flex items-center bg-slate-100 border border-black rounded-xl p-0.5 shadow-neo-sm">
+                    {/* Reorder Buttons (Panah Atas / Bawah untuk Merge & Images to PDF) */}
+                    {(activeMode === 'merge' || activeMode === 'images-to-pdf') && files.length > 1 && (
+                      <div className="flex items-center bg-slate-100 dark:bg-[#333] border border-black dark:border-white rounded-xl p-0.5 shadow-neo-sm">
                         <button
                           type="button"
                           onClick={() => moveFileUp(idx)}
                           disabled={isProcessing || idx === 0}
-                          className="p-1.5 hover:bg-neo-yellow rounded-lg transition disabled:opacity-25 disabled:hover:bg-transparent cursor-pointer"
+                          className="p-1.5 hover:bg-neo-yellow rounded-lg transition disabled:opacity-25 disabled:hover:bg-transparent cursor-pointer text-black dark:text-white"
                           title="Geser ke Atas (Urutan Lebih Awal)"
                         >
-                          <ArrowUp className="w-3.5 h-3.5 text-black stroke-[3]" />
+                          <ArrowUp className="w-3.5 h-3.5 stroke-[3]" />
                         </button>
                         <button
                           type="button"
                           onClick={() => moveFileDown(idx)}
                           disabled={isProcessing || idx === files.length - 1}
-                          className="p-1.5 hover:bg-neo-yellow rounded-lg transition disabled:opacity-25 disabled:hover:bg-transparent cursor-pointer"
+                          className="p-1.5 hover:bg-neo-yellow rounded-lg transition disabled:opacity-25 disabled:hover:bg-transparent cursor-pointer text-black dark:text-white"
                           title="Geser ke Bawah (Urutan Berikutnya)"
                         >
-                          <ArrowDown className="w-3.5 h-3.5 text-black stroke-[3]" />
+                          <ArrowDown className="w-3.5 h-3.5 stroke-[3]" />
                         </button>
                       </div>
                     )}
@@ -948,10 +1131,10 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                     <button
                       onClick={() => removeFile(idx)}
                       disabled={isProcessing}
-                      className="p-2 border border-black rounded-xl hover:bg-rose-200 transition cursor-pointer"
+                      className="p-2 border border-black dark:border-white rounded-xl hover:bg-rose-200 dark:hover:bg-rose-900/50 transition cursor-pointer text-black dark:text-white"
                       title="Hapus Berkas"
                     >
-                      <Trash2 className="w-4 h-4 text-black" />
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
@@ -959,11 +1142,11 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
             </div>
 
             {/* Action CTA Button */}
-            <div className="mt-6 pt-5 border-t-[3px] border-black flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3">
+            <div className="mt-6 pt-5 border-t-[3px] border-black dark:border-white flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3">
               <button
                 onClick={executeAction}
-                disabled={isProcessing || (currentTool.multiple && files.length < 2)}
-                className={`w-full sm:w-auto px-6 py-3.5 min-h-[48px] justify-center ${currentTool.color} border-2 border-black rounded-xl font-black text-xs sm:text-sm shadow-neo hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-neo-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50`}
+                disabled={isProcessing || (activeMode === 'merge' && files.length < 2)}
+                className={`w-full sm:w-auto px-6 py-3.5 min-h-[48px] justify-center ${currentTool.color} text-black border-2 border-black rounded-xl font-black text-xs sm:text-sm shadow-neo hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-neo-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50`}
               >
                 {isProcessing ? (
                   <>
@@ -976,6 +1159,12 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                     <span>
                       {activeMode === 'to-docx'
                         ? 'KONVERSI KE WORD (.DOCX)'
+                        : activeMode === 'images-to-pdf'
+                        ? `GABUNGKAN ${files.length} GAMBAR KE PDF`
+                        : activeMode === 'pdf-to-images'
+                        ? 'RENDER PDF KE GAMBAR (150 DPI)'
+                        : activeMode === 'organize'
+                        ? 'TERAPKAN PENATAAN & PUTAR PDF'
                         : activeMode === 'split'
                         ? 'EKSTRAK HALAMAN SEKARANG'
                         : activeMode === 'merge'
@@ -998,13 +1187,13 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
 
             {/* Compress Special Result Feedback with Size Comparison */}
             {downloadUrl && activeMode === 'compress' && (
-              <div className="mt-6 p-5 sm:p-6 bg-neo-yellow border-[3px] border-black rounded-2xl shadow-neo animate-fadeIn">
+              <div className="mt-6 p-5 sm:p-6 bg-neo-yellow border-[3px] border-black rounded-2xl shadow-neo animate-fadeIn text-black">
                 <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <span className="p-1.5 bg-black text-white rounded-lg">
                       <Minimize2 className="w-4 h-4 stroke-[3]" />
                     </span>
-                    <span className="text-xs sm:text-sm font-black uppercase text-black tracking-wide">
+                    <span className="text-xs sm:text-sm font-black uppercase tracking-wide">
                       HASIL KOMPRESI DOKUMEN PDF ({compressionLevel === 'extreme' ? 'PRESET EKSTREM' : 'PRESET REKOMENDASI'})
                     </span>
                   </div>
@@ -1074,7 +1263,7 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                   <button
                     type="button"
                     onClick={clearAll}
-                    className="w-full sm:w-auto px-6 py-3 min-h-[44px] bg-white border-2 border-black rounded-xl font-black text-xs sm:text-sm text-black shadow-neo hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-neo-sm hover:bg-slate-100 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    className="w-full sm:w-auto px-6 py-3 min-h-[44px] bg-white dark:bg-[#252525] border-2 border-black dark:border-white rounded-xl font-black text-xs sm:text-sm text-black dark:text-white shadow-neo dark:shadow-neo-dark hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-neo-sm hover:bg-slate-100 dark:hover:bg-[#333] transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <RotateCcw className="w-4 h-4 stroke-[2.5]" />
                     <span>Konversi Berkas Lain</span>
@@ -1092,7 +1281,13 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
       <LoadingModal
         isOpen={isProcessing}
         title={
-          activeMode === 'compress'
+          activeMode === 'images-to-pdf'
+            ? `MENGGABUNGKAN ${files.length} GAMBAR KE PDF...`
+            : activeMode === 'pdf-to-images'
+            ? 'MERENDER HALAMAN PDF MENJADI GAMBAR...'
+            : activeMode === 'organize'
+            ? 'MENATA ULANG & MEMUTAR HALAMAN PDF...'
+            : activeMode === 'compress'
             ? 'MENYUSUTKAN UKURAN PDF...'
             : activeMode === 'to-docx'
             ? 'MENGONVERSI PDF KE WORD (.DOCX)...'

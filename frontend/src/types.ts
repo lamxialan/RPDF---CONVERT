@@ -8,7 +8,19 @@ export type PdfToolMode =
   | 'protect'
   | 'unlock'
   | 'watermark'
-  | 'page-numbers';
+  | 'page-numbers'
+  | 'images-to-pdf'
+  | 'pdf-to-images'
+  | 'organize';
+
+export interface RecentActivityItem {
+  id: string;
+  fileName: string;
+  operation: string;
+  timestamp: number;
+  downloadUrl: string;
+  fileSize?: number;
+}
 
 export type ConversionStatus = 'idle' | 'uploading' | 'processing' | 'completed' | 'failed';
 

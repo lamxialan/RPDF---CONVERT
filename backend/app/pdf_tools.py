@@ -301,3 +301,129 @@ def add_page_numbers_to_pdf(
 
     with open(output_path, "wb") as f:
         writer.write(f)
+
+def convert_images_to_pdf(image_paths: List[str], output_path: str) -> int:
+    """
+    Menggabungkan multi-file gambar (JPG, PNG, WebP) menjadi satu dokumen PDF terstruktur.
+    """
+    from PIL import Image
+
+    if not image_paths:
+        raise ValueError("Tidak ada gambar yang diunggah untuk dikonversi.")
+
+    rgb_images = []
+    for p in image_paths:
+        im = Image.open(p)
+        if im.mode in ("RGBA", "LA", "P"):
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            if "A" in im.mode:
+                bg.paste(im, mask=im.split()[-1])
+            else:
+                bg.paste(im)
+            im = bg
+        elif im.mode != "RGB":
+            im = im.convert("RGB")
+        rgb_images.append(im)
+
+    if not rgb_images:
+        raise ValueError("Gambar tidak dapat diproses.")
+
+    rgb_images[0].save(
+        output_path,
+        "PDF",
+        resolution=100.0,
+        save_all=True,
+        append_images=rgb_images[1:]
+    )
+    return len(rgb_images)
+
+def convert_pdf_to_images(input_path: str, output_path: str) -> tuple[str, int]:
+    """
+    Merender setiap halaman dokumen PDF menjadi gambar JPEG/PNG berkualitas tinggi (150 DPI).
+    Jika lebih dari 1 halaman, seluruh gambar dikemas ke dalam arsip .ZIP.
+    Mengembalikan format target ('zip' atau 'png') dan total halaman.
+    """
+    import zipfile
+    import fitz
+
+    doc = fitz.open(input_path)
+    total_pages = len(doc)
+    if total_pages == 0:
+        doc.close()
+        raise ValueError("Dokumen PDF kosong atau tidak memiliki halaman.")
+
+    # 150 DPI rendering (zoom = 150 / 72)
+    zoom = 150.0 / 72.0
+    mat = fitz.Matrix(zoom, zoom)
+
+    if total_pages == 1:
+        page = doc[0]
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        pix.save(output_path)
+        doc.close()
+        return "png", 1
+    else:
+        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for i, page in enumerate(doc):
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                img_bytes = pix.tobytes("png")
+                zipf.writestr(f"halaman_{i+1:03d}.png", img_bytes)
+        doc.close()
+        return "zip", total_pages
+
+def organize_and_rotate_pdf(input_path: str, output_path: str, delete_pages_str: str = "", rotation: int = 0) -> int:
+    """
+    Menata dokumen PDF: menghapus halaman tertentu dan/atau memutar orientasi halaman (90, 180, 270 derajat).
+    """
+    delete_indices = set()
+    if delete_pages_str and delete_pages_str.strip():
+        for part in delete_pages_str.replace(" ", "").split(","):
+            if part.isdigit():
+                idx = int(part) - 1
+                delete_indices.add(idx)
+
+    # Coba PyMuPDF terlebih dahulu
+    try:
+        import fitz
+        doc = fitz.open(input_path)
+        total_pages = len(doc)
+
+        valid_deletes = {i for i in delete_indices if 0 <= i < total_pages}
+        if len(valid_deletes) >= total_pages:
+            doc.close()
+            raise ValueError("Tidak dapat menghapus seluruh halaman PDF. Sisakan minimal 1 halaman.")
+
+        for idx in sorted(list(valid_deletes), reverse=True):
+            doc.delete_page(idx)
+
+        if rotation in [90, 180, 270]:
+            for page in doc:
+                page.set_rotation((page.rotation + rotation) % 360)
+
+        doc.save(output_path, deflate=True, garbage=4, clean=True)
+        remaining = len(doc)
+        doc.close()
+        return remaining
+
+    except Exception:
+        # Fallback ke pypdf
+        reader = PdfReader(input_path)
+        total_pages = len(reader.pages)
+        valid_deletes = {i for i in delete_indices if 0 <= i < total_pages}
+
+        if len(valid_deletes) >= total_pages:
+            raise ValueError("Tidak dapat menghapus seluruh halaman PDF. Sisakan minimal 1 halaman.")
+
+        writer = PdfWriter()
+        kept = 0
+        for idx, page in enumerate(reader.pages):
+            if idx not in valid_deletes:
+                if rotation in [90, 180, 270]:
+                    page.rotate(rotation)
+                writer.add_page(page)
+                kept += 1
+
+        with open(output_path, "wb") as f:
+            writer.write(f)
+        return kept
+

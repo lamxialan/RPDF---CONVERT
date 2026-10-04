@@ -512,6 +512,159 @@ async def page_numbers_pdf_endpoint(
         "download_name": safe_name
     }
 
+@app.post("/api/pdf/images-to-pdf")
+async def images_to_pdf_endpoint(files: List[UploadFile] = File(...)):
+    if not files:
+        raise HTTPException(status_code=400, detail="Minimal 1 gambar dibutuhkan untuk membuat PDF.")
+
+    job_id = str(uuid.uuid4())
+    temp_image_paths = []
+    output_path = os.path.join(STORAGE_DIR, f"{job_id}_out.pdf")
+
+    try:
+        for idx, f in enumerate(files):
+            content = await f.read()
+            ext = os.path.splitext(f.filename or "img")[1].lower() or ".jpg"
+            img_path = os.path.join(STORAGE_DIR, f"{job_id}_in_{idx}{ext}")
+            with open(img_path, "wb") as out_f:
+                out_f.write(content)
+            temp_image_paths.append(img_path)
+
+        from app.pdf_tools import convert_images_to_pdf
+        count = await asyncio.to_thread(convert_images_to_pdf, temp_image_paths, output_path)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal mengonversi gambar ke PDF: {e}")
+    finally:
+        for p in temp_image_paths:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+
+    safe_name = f"Images_to_PDF_{uuid.uuid4().hex[:6]}.pdf"
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "download_name": safe_name,
+        "status": "completed",
+        "target_format": "pdf",
+        "output_path": output_path
+    }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "download_url": f"/api/download/{job_id}",
+        "message": f"Berhasil menggabungkan {count} gambar menjadi dokumen PDF.",
+        "download_name": safe_name
+    }
+
+@app.post("/api/pdf/to-images")
+@app.post("/api/pdf/pdf-to-images")
+async def pdf_to_images_endpoint(file: UploadFile = File(...)):
+    contents = await file.read()
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_in.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        from app.pdf_tools import convert_pdf_to_images
+        temp_out = os.path.join(STORAGE_DIR, f"{job_id}_out.tmp")
+        target_format, page_count = await asyncio.to_thread(convert_pdf_to_images, input_path, temp_out)
+
+        final_filename = f"{job_id}_out.{target_format}"
+        final_output_path = os.path.join(STORAGE_DIR, final_filename)
+        if os.path.exists(final_output_path):
+            os.remove(final_output_path)
+        os.rename(temp_out, final_output_path)
+
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=500, detail=f"Gagal merender PDF ke gambar: {e}")
+    finally:
+        if os.path.exists(input_path):
+            try:
+                os.remove(input_path)
+            except Exception:
+                pass
+
+    orig_stem = os.path.splitext(file.filename or "document")[0]
+    safe_name = f"{orig_stem}_images.{target_format}"
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "download_name": safe_name,
+        "status": "completed",
+        "target_format": target_format,
+        "output_path": final_output_path
+    }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "download_url": f"/api/download/{job_id}",
+        "message": f"Berhasil merender {page_count} halaman PDF menjadi format {target_format.upper()}.",
+        "download_name": safe_name,
+        "page_count": page_count,
+        "target_format": target_format
+    }
+
+@app.post("/api/pdf/organize")
+async def organize_pdf_endpoint(
+    file: UploadFile = File(...),
+    delete_pages: str = Form(""),
+    rotation: int = Form(0)
+):
+    contents = await file.read()
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(STORAGE_DIR, f"{job_id}_in.pdf")
+    output_path = os.path.join(STORAGE_DIR, f"{job_id}_out.pdf")
+
+    with open(input_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        from app.pdf_tools import organize_and_rotate_pdf
+        remaining_count = await asyncio.to_thread(
+            organize_and_rotate_pdf,
+            input_path,
+            output_path,
+            delete_pages,
+            rotation
+        )
+    except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        raise HTTPException(status_code=400, detail=f"Gagal menata halaman PDF: {e}")
+    finally:
+        if os.path.exists(input_path):
+            try:
+                os.remove(input_path)
+            except Exception:
+                pass
+
+    orig_stem = os.path.splitext(file.filename or "document")[0]
+    safe_name = f"{orig_stem}_organized.pdf"
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "download_name": safe_name,
+        "status": "completed",
+        "target_format": "pdf",
+        "output_path": output_path
+    }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "download_url": f"/api/download/{job_id}",
+        "message": f"PDF berhasil ditata ({remaining_count} halaman disimpan).",
+        "download_name": safe_name,
+        "remaining_pages": remaining_count
+    }
+
 @app.post("/api/image/remove-bg")
 @app.post("/api/remove-bg")
 async def remove_bg_endpoint(

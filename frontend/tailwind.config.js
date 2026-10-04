@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: 'class',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -9,6 +10,7 @@ export default {
       colors: {
         neo: {
           bg: '#F8F7F3',
+          dark: '#121212',
           yellow: '#FFE600',
           pink: '#FF70A6',
           purple: '#A78BFA',
@@ -23,6 +25,9 @@ export default {
         'neo-lg': '6px 6px 0px 0px #000000',
         'neo-xl': '8px 8px 0px 0px #000000',
         'neo-sm': '2px 2px 0px 0px #000000',
+        'neo-dark': '4px 4px 0px 0px #FFFFFF',
+        'neo-dark-lg': '6px 6px 0px 0px #FFFFFF',
+        'neo-dark-sm': '2px 2px 0px 0px #FFFFFF',
       }
     },
   },
