@@ -28,6 +28,16 @@ export const RemoveBgConverter: React.FC = () => {
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
   const [previewBg, setPreviewBg] = useState<'checkerboard' | 'dark' | 'white'>('checkerboard');
   
+  // Auto-clear alert notification setelah 6 detik
+  useEffect(() => {
+    if (alertMessage) {
+      const timer = setTimeout(() => {
+        setAlertMessage(null);
+      }, 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [alertMessage]);
+
   // Pengaturan Canggih Chroma-Key & AI Cutout
   const [mode, setMode] = useState<CutoutMode>('auto');
   const [threshold, setThreshold] = useState<number>(240);

@@ -21,7 +21,9 @@ import {
   Sparkles,
   ArrowRight,
   ShieldCheck,
-  Check
+  Check,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import { PdfToolMode } from '../types';
@@ -80,6 +82,50 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
       setActiveMode(initialMode);
     }
   }, [initialMode]);
+
+  // Auto-clear alert notification setelah 6 detik
+  useEffect(() => {
+    if (alertMessage) {
+      const timer = setTimeout(() => {
+        setAlertMessage(null);
+      }, 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [alertMessage]);
+
+  // Auto-clear success message setelah 6 detik
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => {
+        setSuccessMessage(null);
+      }, 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMessage]);
+
+  // Geser urutan berkas ke atas
+  const moveFileUp = (idx: number) => {
+    if (idx <= 0) return;
+    setFiles(prev => {
+      const updated = [...prev];
+      const temp = updated[idx - 1];
+      updated[idx - 1] = updated[idx];
+      updated[idx] = temp;
+      return updated;
+    });
+  };
+
+  // Geser urutan berkas ke bawah
+  const moveFileDown = (idx: number) => {
+    if (idx >= files.length - 1) return;
+    setFiles(prev => {
+      const updated = [...prev];
+      const temp = updated[idx + 1];
+      updated[idx + 1] = updated[idx];
+      updated[idx] = temp;
+      return updated;
+    });
+  };
 
   // Reset file jika berpindah mode yang single vs multiple
   const handleModeSwitch = (mode: PdfToolMode) => {
@@ -178,6 +224,8 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
   const currentTool = tools.find(t => t.id === activeMode) || tools[0];
 
   const handleFiles = (incoming: FileList | File[]) => {
+    setAlertMessage(null);
+    setSuccessMessage(null);
     const valid: File[] = [];
     for (let i = 0; i < incoming.length; i++) {
       const f = incoming[i];
@@ -738,8 +786,15 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
         {/* Files Selected List */}
         {files.length > 0 && (
           <div className="mt-8">
-            <div className="flex items-center justify-between mb-3 text-xs font-black uppercase text-black">
-              <span>{currentTool.multiple ? `Daftar Dokumen PDF (${files.length})` : 'Dokumen PDF Terpilih'}</span>
+            <div className="flex items-center justify-between mb-3 text-xs font-black uppercase text-black flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <span>{currentTool.multiple ? `Daftar Dokumen PDF (${files.length})` : 'Dokumen PDF Terpilih'}</span>
+                {activeMode === 'merge' && files.length > 1 && (
+                  <span className="hidden sm:inline bg-neo-yellow border border-black px-2.5 py-0.5 rounded-lg text-[10px] font-black lowercase text-black shadow-neo-sm">
+                    ↑ ↓ atur urutan gabung
+                  </span>
+                )}
+              </div>
               <button
                 onClick={clearAll}
                 disabled={isProcessing}
@@ -784,14 +839,40 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ initialMode = 'to-docx' 
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => removeFile(idx)}
-                    disabled={isProcessing}
-                    className="p-2 border border-black rounded-xl hover:bg-rose-200 transition cursor-pointer"
-                    title="Hapus"
-                  >
-                    <Trash2 className="w-4 h-4 text-black" />
-                  </button>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {/* Reorder Buttons (Panah Atas / Bawah untuk Mode Merge) */}
+                    {activeMode === 'merge' && files.length > 1 && (
+                      <div className="flex items-center bg-slate-100 border border-black rounded-xl p-0.5 shadow-neo-sm">
+                        <button
+                          type="button"
+                          onClick={() => moveFileUp(idx)}
+                          disabled={isProcessing || idx === 0}
+                          className="p-1.5 hover:bg-neo-yellow rounded-lg transition disabled:opacity-25 disabled:hover:bg-transparent cursor-pointer"
+                          title="Geser ke Atas (Urutan Lebih Awal)"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5 text-black stroke-[3]" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => moveFileDown(idx)}
+                          disabled={isProcessing || idx === files.length - 1}
+                          className="p-1.5 hover:bg-neo-yellow rounded-lg transition disabled:opacity-25 disabled:hover:bg-transparent cursor-pointer"
+                          title="Geser ke Bawah (Urutan Berikutnya)"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5 text-black stroke-[3]" />
+                        </button>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={() => removeFile(idx)}
+                      disabled={isProcessing}
+                      className="p-2 border border-black rounded-xl hover:bg-rose-200 transition cursor-pointer"
+                      title="Hapus Berkas"
+                    >
+                      <Trash2 className="w-4 h-4 text-black" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

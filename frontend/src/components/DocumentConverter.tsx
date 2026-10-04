@@ -31,6 +31,16 @@ export const DocumentConverter: React.FC<DocumentConverterProps> = ({ onSwitchTo
   const [alertMessage, setAlertMessage] = useState<{ title: string; desc: string; type: 'error' | 'warning' | 'info' } | null>(null);
   const [isZipping, setIsZipping] = useState<boolean>(false);
 
+  // Auto-clear alert notification setelah 6 detik
+  useEffect(() => {
+    if (alertMessage) {
+      const timer = setTimeout(() => {
+        setAlertMessage(null);
+      }, 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [alertMessage]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const getSourceExt = (filename: string): string => {
@@ -39,6 +49,7 @@ export const DocumentConverter: React.FC<DocumentConverterProps> = ({ onSwitchTo
   };
 
   const handleFiles = (incomingFiles: FileList | File[]) => {
+    setAlertMessage(null);
     const newItems: FileItem[] = [];
     const maxSizeBytes = 25 * 1024 * 1024;
 
