@@ -17,6 +17,7 @@ import {
   ClipboardCopy
 } from 'lucide-react';
 import { FileItem, DOCUMENT_EXTENSIONS, DOCUMENT_TARGETS, IMAGE_EXTENSIONS } from '../types';
+import { getApiUrl } from '../config/api';
 
 interface DocumentConverterProps {
   onSwitchToImageTab?: () => void;
@@ -172,7 +173,7 @@ export const DocumentConverter: React.FC<DocumentConverterProps> = ({ onSwitchTo
     formData.append('target_format', item.targetFormat);
 
     try {
-      const res = await fetch('/api/convert', { method: 'POST', body: formData });
+      const res = await fetch(getApiUrl('/api/convert'), { method: 'POST', body: formData });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: 'Gagal mengunggah dokumen' }));
         throw new Error(err.detail || 'Gagal mengunggah');
@@ -188,13 +189,13 @@ export const DocumentConverter: React.FC<DocumentConverterProps> = ({ onSwitchTo
       await new Promise<void>((resolve, reject) => {
         const interval = setInterval(async () => {
           try {
-            const checkRes = await fetch(`/api/jobs/${jobId}`);
+            const checkRes = await fetch(getApiUrl(`/api/jobs/${jobId}`));
             if (!checkRes.ok) throw new Error('Gagal memeriksa status');
             const jobData = await checkRes.json();
 
             if (jobData.status === 'completed') {
               clearInterval(interval);
-              const downloadUrl = jobData.download_url || `/api/download/${jobId}`;
+              const downloadUrl = getApiUrl(jobData.download_url || `/api/download/${jobId}`);
               let convertedBlob: Blob | undefined;
               try {
                 const blobRes = await fetch(downloadUrl);

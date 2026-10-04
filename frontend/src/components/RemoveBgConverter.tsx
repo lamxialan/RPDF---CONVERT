@@ -14,6 +14,7 @@ import {
   Layers,
   ClipboardCopy
 } from 'lucide-react';
+import { getApiUrl } from '../config/api';
 
 type CutoutMode = 'auto' | 'white_bg' | 'ai';
 
@@ -225,7 +226,7 @@ export const RemoveBgConverter: React.FC = () => {
         formData.append('file', fileToProcess);
         formData.append('mode', 'white_bg');
         formData.append('threshold', currentThreshold.toString());
-        fetch('/api/image/remove-bg', { method: 'POST', body: formData }).catch(() => {});
+        fetch(getApiUrl('/api/image/remove-bg'), { method: 'POST', body: formData }).catch(() => {});
       } else {
         // Pemrosesan AI via Backend
         const formData = new FormData();
@@ -233,7 +234,7 @@ export const RemoveBgConverter: React.FC = () => {
         formData.append('mode', currentMode);
         formData.append('threshold', currentThreshold.toString());
 
-        const response = await fetch('/api/image/remove-bg', {
+        const response = await fetch(getApiUrl('/api/image/remove-bg'), {
           method: 'POST',
           body: formData,
         });

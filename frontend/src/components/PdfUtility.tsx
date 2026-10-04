@@ -12,6 +12,7 @@ import {
   X,
   FileText
 } from 'lucide-react';
+import { getApiUrl } from '../config/api';
 
 interface PdfUtilityProps {
   mode: 'merge' | 'compress';
@@ -86,13 +87,13 @@ export const PdfUtility: React.FC<PdfUtilityProps> = ({ mode }) => {
     const endpoint = mode === 'merge' ? '/api/pdf/merge' : '/api/pdf/compress';
 
     try {
-      const res = await fetch(endpoint, { method: 'POST', body: formData });
+      const res = await fetch(getApiUrl(endpoint), { method: 'POST', body: formData });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: 'Gagal memproses PDF' }));
         throw new Error(err.detail || 'Gagal memproses PDF');
       }
       const data = await res.json();
-      setDownloadUrl(data.download_url);
+      setDownloadUrl(getApiUrl(data.download_url));
     } catch (err: any) {
       setAlertMessage(err.message || 'Terjadi kesalahan sistem.');
     } finally {

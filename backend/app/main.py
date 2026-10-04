@@ -37,12 +37,27 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Konfigurasi CORS Terbuka & Dinamis untuk Vercel & Localhost
+cors_env = os.getenv("CORS_ORIGINS", "")
+custom_origins = [o.strip() for o in cors_env.split(",") if o.strip()]
+
+default_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+
+allowed_origins = list(set(default_origins + custom_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition", "Content-Type", "Content-Length", "X-Cutout-Engine"]
 )
 
 def run_conversion_sync(job_id: str, input_path: str, output_path: str, source_ext: str, target_format: str):

@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: rpdf-backend
+    env: docker
+    region: singapore
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: CORS_ORIGINS
+        value: "https://*.vercel.app,http://localhost:5173,http://localhost:3000"
+      - key: MAX_FILE_SIZE_MB
+        value: 25
+      - key: FILE_TTL_SECONDS
+        value: 3600
+      - key: CLEANUP_INTERVAL_SECONDS
+        value: 300

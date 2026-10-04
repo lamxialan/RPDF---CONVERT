@@ -33,6 +33,7 @@ COPY . .
 # Buat direktori temp_storage
 RUN mkdir -p /app/temp_storage && chmod 777 /app/temp_storage
 
+ENV PORT=8000
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
