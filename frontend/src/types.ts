@@ -27,6 +27,8 @@ export interface PdfAnnotation {
   text?: string;
   fontSize?: number;
   color?: string;
+  isBold?: boolean;
+  isItalic?: boolean;
   imageData?: string;
 }
 

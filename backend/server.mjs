@@ -886,7 +886,7 @@ const server = http.createServer((req, res) => {
   }
 
   // Edit & Sign PDF Endpoint (PyMuPDF / Node Bridge)
-  if (req.method === 'POST' && (url.pathname === '/api/pdf/edit-sign' || url.pathname === '/api/pdf/annotate')) {
+  if (req.method === 'POST' && (url.pathname === '/api/pdf/apply-annotations' || url.pathname === '/api/pdf/edit-sign' || url.pathname === '/api/pdf/annotate')) {
     const contentType = req.headers['content-type'] || '';
     const boundaryMatch = contentType.match(/boundary=(.+)$/);
     if (!boundaryMatch) {

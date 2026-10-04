@@ -319,10 +319,11 @@ def dispatch_conversion(input_path: str, output_path: str, source_ext: str, targ
     else:
         raise ValueError(f"Kombinasi konversi dari '{source_ext}' ke '{target_ext}' tidak didukung.")
 
-def apply_pdf_annotations(input_path: str, output_path: str, annotations: list) -> int:
+def apply_pdf_annotations(input_path: str, output_path: str, annotations_payload) -> int:
     """
     Menyisipkan anotasi (teks, tanda tangan, stempel gambar, kotak whiteout)
-    ke dokumen PDF menggunakan PyMuPDF (fitz).
+    ke dokumen PDF menggunakan PyMuPDF (fitz) dengan standar Sejda PDF Editor.
+    Mendukung payload berupa array objek anotasi atau object grouped by page.
     """
     import fitz
     import base64
@@ -330,6 +331,22 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations: list) 
     doc = fitz.open(input_path)
     total_pages = len(doc)
     applied_count = 0
+
+    # Normalisasi format payload (bisa flat array atau dict grouped-by-page)
+    annotations = []
+    if isinstance(annotations_payload, list):
+        annotations = annotations_payload
+    elif isinstance(annotations_payload, dict):
+        for page_k, items in annotations_payload.items():
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        if "page" not in item:
+                            try:
+                                item["page"] = int(page_k)
+                            except Exception:
+                                item["page"] = 1
+                        annotations.append(item)
 
     for ann in annotations:
         if not isinstance(ann, dict):
@@ -366,10 +383,12 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations: list) 
             if not text:
                 continue
             try:
-                raw_font_size = float(ann.get("fontSize", 14))
+                raw_font_size = float(ann.get("fontSize") or ann.get("font_size") or 14)
             except (ValueError, TypeError):
                 raw_font_size = 14.0
             font_size = max(8.0, raw_font_size * scale_y)
+
+            # Warna teks
             hex_color = str(ann.get("color", "#000000")).lstrip("#")
             if len(hex_color) == 6:
                 try:
@@ -379,21 +398,40 @@ def apply_pdf_annotations(input_path: str, output_path: str, annotations: list) 
                     color = (r, g, b)
                 except ValueError:
                     color = (0, 0, 0)
+            elif hex_color.lower() == "fff" or hex_color.lower() == "ffffff":
+                color = (1, 1, 1)
             else:
                 color = (0, 0, 0)
 
+            # Font styling: Bold / Italic
+            is_bold = bool(ann.get("isBold") or ann.get("bold"))
+            is_italic = bool(ann.get("isItalic") or ann.get("italic"))
+
+            if is_bold and is_italic:
+                fontname = "hebi"  # Helvetica Bold-Oblique
+            elif is_bold:
+                fontname = "hebo"  # Helvetica Bold
+            elif is_italic:
+                fontname = "heit"  # Helvetica Oblique
+            else:
+                fontname = "helv"  # Helvetica Regular
+
             rect = fitz.Rect(x, y, x + max(w, 250), y + max(h, font_size * 2))
             try:
-                res = page.insert_textbox(rect, text, fontsize=font_size, color=color, fontname="helv")
+                res = page.insert_textbox(rect, text, fontsize=font_size, color=color, fontname=fontname)
                 if res < 0:
-                    page.insert_text(fitz.Point(x, y + font_size), text, fontsize=font_size, color=color, fontname="helv")
+                    page.insert_text(fitz.Point(x, y + font_size), text, fontsize=font_size, color=color, fontname=fontname)
             except Exception:
-                page.insert_text(fitz.Point(x, y + font_size), text, fontsize=font_size, color=color, fontname="helv")
+                try:
+                    page.insert_text(fitz.Point(x, y + font_size), text, fontsize=font_size, color=color, fontname=fontname)
+                except Exception:
+                    page.insert_text(fitz.Point(x, y + font_size), text, fontsize=font_size, color=color)
             applied_count += 1
 
         elif ann_type == "whiteout":
-            # Kotak penutup putih untuk menutupi bagian teks lama
+            # Kotak penutup putih solid untuk menutupi bagian teks/informasi lama
             rect = fitz.Rect(x, y, x + w, y + h)
+            # Default putih murni (1, 1, 1)
             page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1), width=0)
             applied_count += 1
 

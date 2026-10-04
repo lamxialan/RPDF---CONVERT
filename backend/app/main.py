@@ -665,6 +665,7 @@ async def organize_pdf_endpoint(
         "remaining_pages": remaining_count
     }
 
+@app.post("/api/pdf/apply-annotations")
 @app.post("/api/pdf/edit-sign")
 @app.post("/api/pdf/annotate")
 async def edit_and_sign_pdf(
