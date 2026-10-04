@@ -78,8 +78,12 @@ def run_conversion_sync(job_id: str, input_path: str, output_path: str, source_e
             except Exception:
                 pass
 
+@app.get("/")
+def root_health_check():
+    return {"status": "ok", "message": "RPDF Backend Running"}
+
 @app.get("/api/health")
-def health_check():
+def api_health_check():
     return {
         "status": "ok",
         "service": "RPDF Engine Pro",
